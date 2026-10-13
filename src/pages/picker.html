@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'self'; script-src 'self'" />
+    <title>Choose what to share</title>
+    <link rel="stylesheet" href="picker.css" />
+  </head>
+  <body>
+    <header>
+      <h1>Choose what to share</h1>
+      <nav role="tablist" aria-label="What to share">
+        <button role="tab" id="tab-screen" aria-selected="true" data-kind="screen">Entire screen</button>
+        <button role="tab" id="tab-window" aria-selected="false" data-kind="window">Window</button>
+      </nav>
+    </header>
+    <main id="grid" role="listbox" aria-label="Screens and windows" tabindex="0"></main>
+    <p id="empty" hidden>Nothing to share here.</p>
+    <footer>
+      <label id="audio-row" hidden><input type="checkbox" id="audio" checked /> Share system sound</label>
+      <span class="grow"></span>
+      <button id="cancel" type="button">Cancel</button>
+      <button id="share" type="button" class="main" disabled>Share</button>
+    </footer>
+    <script src="picker.js"></script>
+  </body>
+</html>

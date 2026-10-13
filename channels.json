@@ -1,0 +1,16 @@
+{
+  "prod": {
+    "appId": "io.whoslive.studio",
+    "name": "@studio/desktop",
+    "productName": "WhosLive Studio",
+    "artifact": "WhosLive-Studio-Setup.exe",
+    "studioUrl": "https://studio.whoslive.io/studio"
+  },
+  "dev": {
+    "appId": "io.whoslive.studio.dev",
+    "name": "@studio/desktop-dev",
+    "productName": "WhosLive Studio Dev",
+    "artifact": "WhosLive-Studio-Dev-Setup.exe",
+    "studioUrl": "https://dev-studio.whoslive.io/studio"
+  }
+}

@@ -1,0 +1,81 @@
+name: release
+
+# main builds WhosLive Studio (opens studio.whoslive.io) and publishes it as release v<version>, which becomes
+# GitHub's "latest": the download link and the update feed every installed copy checks. A version that is already
+# released is built but not published, so bump package.json to ship.
+# develop builds WhosLive Studio Dev (opens dev-studio.whoslive.io) as <version>-dev.<run> and replaces the assets on
+# the fixed "dev" pre-release, which is the dev download link and the dev app's update feed.
+on:
+  push:
+    branches: [main, develop]
+  workflow_dispatch:
+
+concurrency:
+  group: release-${{ github.ref_name }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    env:
+      WL_CHANNEL: ${{ github.ref == 'refs/heads/main' && 'prod' || 'dev' }}
+      GH_TOKEN: ${{ github.token }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+
+      - name: Pick the version
+        id: v
+        run: |
+          base=$(node -p "require('./package.json').version")
+          if [ "$WL_CHANNEL" = prod ]; then
+            v=$base
+            if gh release view "v$v" >/dev/null 2>&1; then publish=false; else publish=true; fi
+          else
+            v="$base-dev.$GITHUB_RUN_NUMBER"
+            npm version --no-git-tag-version "$v"
+            publish=true
+          fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "publish=$publish" >> "$GITHUB_OUTPUT"
+          echo "$WL_CHANNEL $v, publish: $publish"
+
+      - run: npm run dist
+
+      # The update feed must name this build, or installed copies never see it.
+      - name: Check the installer and its feed
+        env:
+          V: ${{ steps.v.outputs.version }}
+        run: |
+          ls -la release
+          exe=$(node -p "require('./channels.json')['$WL_CHANNEL'].artifact")
+          test -f "release/$exe" && test -f "release/$exe.blockmap"
+          grep -qx "version: $V" release/latest.yml
+          grep -q "path: $exe" release/latest.yml
+
+      - name: Publish prod
+        if: env.WL_CHANNEL == 'prod' && steps.v.outputs.publish == 'true'
+        env:
+          V: ${{ steps.v.outputs.version }}
+        run: |
+          gh release create "v$V" release/WhosLive-Studio-Setup.exe release/WhosLive-Studio-Setup.exe.blockmap release/latest.yml \
+            --target "$GITHUB_SHA" --title "WhosLive Studio $V" --latest --notes "Download WhosLive-Studio-Setup.exe below, run it, and Studio installs and opens. Installed copies update themselves."
+
+      # The installer goes up before latest.yml, so the feed never names a file that isn't there yet.
+      - name: Publish dev
+        if: env.WL_CHANNEL == 'dev'
+        run: |
+          gh release view dev >/dev/null 2>&1 || gh release create dev --prerelease --target "$GITHUB_SHA" --title "WhosLive Studio Dev" \
+            --notes "Builds from develop, opening dev-studio.whoslive.io. Download WhosLive-Studio-Dev-Setup.exe below. It installs next to WhosLive Studio and updates itself."
+          gh release upload dev release/WhosLive-Studio-Dev-Setup.exe release/WhosLive-Studio-Dev-Setup.exe.blockmap --clobber
+          gh release upload dev release/latest.yml --clobber
