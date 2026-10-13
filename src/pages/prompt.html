@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; script-src 'self'" />
+    <title>WhosLive Studio</title>
+    <link rel="stylesheet" href="prompt.css" />
+  </head>
+  <body>
+    <form id="form" novalidate>
+      <label for="value" id="label">Address</label>
+      <input id="value" type="url" spellcheck="false" autocomplete="off" />
+      <p id="error" role="alert"></p>
+      <footer>
+        <button id="cancel" type="button">Cancel</button>
+        <button id="ok" type="submit" class="main">OK</button>
+      </footer>
+    </form>
+    <script src="prompt.js"></script>
+  </body>
+</html>

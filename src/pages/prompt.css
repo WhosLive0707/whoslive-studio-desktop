@@ -1,0 +1,24 @@
+:root { color-scheme: dark; }
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body {
+  background: #070b12;
+  color: #e6edf5;
+  font: 13px/1.4 "Segoe UI", system-ui, -apple-system, sans-serif;
+}
+form { display: flex; flex-direction: column; height: 100%; padding: 18px 20px 14px; }
+label { font-weight: 600; margin-bottom: 8px; }
+input {
+  height: 36px; padding: 0 12px; border: 1px solid #1e2a3a; border-radius: 10px; background: #0d1420;
+  color: inherit; font: inherit; outline: none;
+}
+input:focus { border-color: #00e5b0; }
+input[aria-invalid="true"] { border-color: #ff5a72; }
+#error { min-height: 18px; margin: 8px 0 0; color: #ff8a9b; font-size: 12.5px; }
+footer { display: flex; justify-content: flex-end; gap: 10px; margin-top: auto; }
+button {
+  height: 34px; padding: 0 18px; border: 1px solid #1e2a3a; border-radius: 999px; background: transparent;
+  color: inherit; font: inherit; font-weight: 600; cursor: pointer;
+}
+button.main { border: 0; background: linear-gradient(90deg, #0077cf, #00e5b0); color: #fff; }
+button:disabled { opacity: 0.45; cursor: default; }
