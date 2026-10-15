@@ -1,7 +1,7 @@
 import { BrowserWindow, desktopCapturer, ipcMain } from "electron";
 import { randomUUID } from "node:crypto";
 
-const kindOf = (id) => id.startsWith("screen:") ? "screen" : "window";
+export const kindOf = (id) => id.startsWith("screen:") ? "screen" : "window";
 export async function pickCaptureSource(parent, o) {
   const token = randomUUID();
   const win2 = new BrowserWindow({

@@ -15,6 +15,14 @@ Until the app is code-signed, Windows may show "Windows protected your PC". Clic
 
 The two install side by side. The app is a shell around the web Studio, so a Studio deploy reaches it without a new installer; only changes under `src/` need one.
 
+## Remembered screen shares
+
+A browser asks which screen to share every time Studio opens. The app remembers each Studio screen share's pick (the
+screen or window, its name, and whether system sound came along) in its settings and shares the same one again by
+itself the next time Studio opens: no chooser. A window that was closed, or a name that now matches several windows,
+isn't guessed: Studio shows that share's "Share again" instead. `src/captureMemory.js`; the bridge is `capture.next`
+and `capture.restore` in `src/preload.js`.
+
 ## Building
 
 ```

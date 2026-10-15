@@ -37,7 +37,14 @@ if (hello?.trusted) {
       menuFn = typeof fn === "function" ? fn : null;
       ipcRenderer.send("desktop:menu-items", Array.isArray(actions) ? actions.filter((a) => typeof a === "string") : []);
     },
-    openExternal: (url) => ipcRenderer.send("desktop:open-external", url)
+    openExternal: (url) => ipcRenderer.send("desktop:open-external", url),
+    /** Screen shares the app remembers: next(key) right before getDisplayMedia() makes the app remember what's
+     *  picked for that key (a capture's id); restore(key) gives { sourceId, audio } for getUserMedia's desktop
+     *  capture (no picker) when that screen or window is still there, else null. */
+    capture: {
+      next: (key) => ipcRenderer.invoke("capture:next", key),
+      restore: (key) => ipcRenderer.invoke("capture:restore", key)
+    }
   });
   void webFrame.executeJavaScript(`(() => {
     const md = navigator.mediaDevices;

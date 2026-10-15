@@ -1,12 +1,13 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, session, shell, webContents } from "electron";
+import { app, BrowserWindow, desktopCapturer, dialog, ipcMain, Menu, session, shell, webContents } from "electron";
 import { autoUpdater } from "electron-updater";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { BrowserSources } from "./browserSources.js";
+import { captureKeyOk, findAgain, rememberPick } from "./captureMemory.js";
 import { CHANNEL } from "./channel.js";
 import { AUTOPLAY_FREE, UA_FALLBACK } from "./names.js";
 import { ObsReader } from "./obs.js";
-import { pickCaptureSource } from "./picker.js";
+import { kindOf, pickCaptureSource } from "./picker.js";
 import { promptText } from "./prompt.js";
 import { loadSettings, MAX_LOCAL_PAGES, saveSettings } from "./settings.js";
 import { chromeIdentity, cleanStudioUrl, MENU_ACTIONS, openTarget, originOf, STUDIO_CHOICES, trustedOrigins } from "./studio.js";
@@ -21,7 +22,7 @@ app.commandLine.appendSwitch("disable-renderer-backgrounding");
 app.commandLine.appendSwitch("disable-backgrounding-occluded-windows");
 app.commandLine.appendSwitch("autoplay-policy", AUTOPLAY_FREE);
 app.setAppUserModelId(CHANNEL.appId);
-const settings = { studioUrl: "", bounds: null, maximized: false, localPages: [] };
+const settings = { studioUrl: "", bounds: null, maximized: false, localPages: [], capturePicks: {} };
 let override = cleanStudioUrl(process.argv.find((a) => a.startsWith("--studio-url="))?.slice("--studio-url=".length));
 const studioUrl = () => override ?? settings.studioUrl;
 let trusted = new Set();
@@ -35,6 +36,8 @@ let updates = null;
 let sources;
 const obs = new ObsReader();
 let pendingAudio = null;
+/** The next screen share's picker is for this capture of Studio's: what's picked is remembered (capture.next). */
+let pendingCapture = null;
 const menuItems = new Map();
 if (!app.requestSingleInstanceLock()) app.quit();
 app.on("second-instance", () => {
@@ -71,6 +74,9 @@ function setUpSession() {
         const frame = sources.frameOf(owner, p.id);
         if (frame) return cb({ video: frame, audio: frame, enableLocalEcho: p.hear });
       }
+      const pc = pendingCapture;
+      pendingCapture = null;
+      const remember = !!pc && !!owner && pc.owner === owner && Date.now() - pc.at < 1e4;
       const parent = owner && BrowserWindow.fromWebContents(owner) || win;
       const pick = await pickCaptureSource(parent, {
         audio: req.audioRequested,
@@ -80,6 +86,11 @@ function setUpSession() {
         icon: ICON
       });
       if (!pick) return deny();
+      // Studio asked for this to be remembered: the same screen or window comes back the next time it opens.
+      if (remember) {
+        settings.capturePicks = rememberPick(settings.capturePicks, pc.key, { id: pick.source.id, name: pick.source.name, audio: pick.audio }, Date.now());
+        saveSettings(settings);
+      }
       cb(pick.audio ? { video: pick.source, audio: "loopback" } : { video: pick.source });
     })().catch(deny);
   });
@@ -119,6 +130,23 @@ function setUpBridge() {
     if (!sources.frameOf(owner, String(id))) return false;
     pendingAudio = { owner, id: String(id), at: Date.now(), hear: o?.hear === true };
     return true;
+  });
+  // Screen shares the app remembers: next(key) before Studio's share picker, restore(key) when Studio opens again.
+  ipcMain.handle("capture:next", (e, key) => {
+    const owner = sender(e);
+    if (!captureKeyOk(key)) return false;
+    pendingCapture = { owner, key, at: Date.now() };
+    return true;
+  });
+  ipcMain.handle("capture:restore", async (e, key) => {
+    sender(e);
+    const pick = captureKeyOk(key) ? settings.capturePicks[key] : void 0;
+    if (!pick) return null;
+    const own = new Set(BrowserWindow.getAllWindows().map((w) => w.getMediaSourceId()));
+    const list = await desktopCapturer.getSources({ types: [kindOf(pick.id)], thumbnailSize: { width: 0, height: 0 } }).then((all) => all.filter((s) => !own.has(s.id))).catch(() => []);
+    const s = findAgain(pick, list);
+    // System sound comes along on Windows only (as in the picker).
+    return s ? { sourceId: s.id, audio: pick.audio && process.platform === "win32" } : null;
   });
   ipcMain.handle("obs:list", (e) => (sender(e), obs.collections()));
   ipcMain.handle("obs:read", async (e, file2) => {

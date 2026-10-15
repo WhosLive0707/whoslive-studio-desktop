@@ -1,7 +1,7 @@
 {
   "name": "@studio/desktop",
   "productName": "WhosLive Studio",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "private": true,
   "description": "WhosLive Studio for Windows and macOS: Studio in its own window, with browser sources, OBS import and full screen, window and system audio capture.",
   "author": "WhosLive, Inc.",
