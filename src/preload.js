@@ -6,6 +6,8 @@ if (hello?.trusted) {
   ipcRenderer.on("bs:status", (_e, id, s) => {
     for (const f of statusFns) f(id, s);
   });
+  const shortcutFns = new Map();
+  ipcRenderer.on("shortcut:press", (_e, accel) => shortcutFns.get(accel)?.());
   let menuFn = null;
   ipcRenderer.on("desktop:menu", (_e, action) => menuFn?.(action));
   contextBridge.exposeInMainWorld("whosliveDesktop", {
@@ -37,7 +39,29 @@ if (hello?.trusted) {
       menuFn = typeof fn === "function" ? fn : null;
       ipcRenderer.send("desktop:menu-items", Array.isArray(actions) ? actions.filter((a) => typeof a === "string") : []);
     },
-    openExternal: (url) => ipcRenderer.send("desktop:open-external", url)
+    openExternal: (url) => ipcRenderer.send("desktop:open-external", url),
+    /** Screen shares the app remembers: next(key) right before getDisplayMedia() makes the app remember what's
+     *  picked for that key (a capture's id); restore(key) gives { sourceId, audio } for getUserMedia's desktop
+     *  capture (no picker) when that screen or window is still there, else null. */
+    capture: {
+      next: (key) => ipcRenderer.invoke("capture:next", key),
+      restore: (key) => ipcRenderer.invoke("capture:restore", key)
+    },
+    /** Global shortcuts (the agent's talk key while a game has focus). register resolves false when the key is
+     *  taken by another app or isn't one Electron knows. */
+    shortcuts: {
+      register: async (accel, onPress) => {
+        if (typeof onPress !== "function") return false;
+        shortcutFns.set(accel, onPress);
+        const ok = await ipcRenderer.invoke("shortcut:register", accel);
+        if (!ok && shortcutFns.get(accel) === onPress) shortcutFns.delete(accel);
+        return ok;
+      },
+      unregister: (accel) => {
+        shortcutFns.delete(accel);
+        return ipcRenderer.invoke("shortcut:unregister", accel);
+      }
+    }
   });
   void webFrame.executeJavaScript(`(() => {
     const md = navigator.mediaDevices;

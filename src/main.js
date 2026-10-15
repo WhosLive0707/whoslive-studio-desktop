@@ -1,12 +1,13 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, session, shell, webContents } from "electron";
+import { app, BrowserWindow, desktopCapturer, dialog, globalShortcut, ipcMain, Menu, session, shell, webContents } from "electron";
 import { autoUpdater } from "electron-updater";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { BrowserSources } from "./browserSources.js";
+import { captureKeyOk, findAgain, rememberPick } from "./captureMemory.js";
 import { CHANNEL } from "./channel.js";
 import { AUTOPLAY_FREE, UA_FALLBACK } from "./names.js";
 import { ObsReader } from "./obs.js";
-import { pickCaptureSource } from "./picker.js";
+import { kindOf, pickCaptureSource } from "./picker.js";
 import { promptText } from "./prompt.js";
 import { loadSettings, MAX_LOCAL_PAGES, saveSettings } from "./settings.js";
 import { chromeIdentity, cleanStudioUrl, MENU_ACTIONS, openTarget, originOf, STUDIO_CHOICES, trustedOrigins } from "./studio.js";
@@ -21,7 +22,7 @@ app.commandLine.appendSwitch("disable-renderer-backgrounding");
 app.commandLine.appendSwitch("disable-backgrounding-occluded-windows");
 app.commandLine.appendSwitch("autoplay-policy", AUTOPLAY_FREE);
 app.setAppUserModelId(CHANNEL.appId);
-const settings = { studioUrl: "", bounds: null, maximized: false, localPages: [] };
+const settings = { studioUrl: "", bounds: null, maximized: false, localPages: [], capturePicks: {} };
 let override = cleanStudioUrl(process.argv.find((a) => a.startsWith("--studio-url="))?.slice("--studio-url=".length));
 const studioUrl = () => override ?? settings.studioUrl;
 let trusted = new Set();
@@ -35,6 +36,26 @@ let updates = null;
 let sources;
 const obs = new ObsReader();
 let pendingAudio = null;
+/** The next screen share's picker is for this capture of Studio's: what's picked is remembered (capture.next). */
+let pendingCapture = null;
+/** Global shortcuts Studio registered (the agent's talk key), and the page each one presses. */
+const shortcuts = new Map();
+const MAX_SHORTCUTS = 4;
+const accelOk = (a) => typeof a === "string" && /^[\w+]{1,60}$/.test(a);
+/** Studio names keys as the browser does (KeyboardEvent.code); Electron's accelerators call some of them otherwise. */
+const KEY_NAMES = {
+  Backquote: "`", Minus: "-", Equal: "=", BracketLeft: "[", BracketRight: "]", Backslash: "\\", Semicolon: ";", Quote: "'",
+  Comma: ",", Period: ".", Slash: "/", ArrowUp: "Up", ArrowDown: "Down", ArrowLeft: "Left", ArrowRight: "Right",
+  NumpadAdd: "numadd", NumpadSubtract: "numsub", NumpadMultiply: "nummult", NumpadDivide: "numdiv", NumpadDecimal: "numdec"
+};
+const electronAccel = (a) => a.split("+").map((k) => KEY_NAMES[k] ?? k.replace(/^Numpad(\d)$/, "num$1")).join("+");
+function dropShortcuts(wc) {
+  for (const [a, owner] of shortcuts) {
+    if (owner !== wc) continue;
+    globalShortcut.unregister(electronAccel(a));
+    shortcuts.delete(a);
+  }
+}
 const menuItems = new Map();
 if (!app.requestSingleInstanceLock()) app.quit();
 app.on("second-instance", () => {
@@ -71,6 +92,9 @@ function setUpSession() {
         const frame = sources.frameOf(owner, p.id);
         if (frame) return cb({ video: frame, audio: frame, enableLocalEcho: p.hear });
       }
+      const pc = pendingCapture;
+      pendingCapture = null;
+      const remember = !!pc && !!owner && pc.owner === owner && Date.now() - pc.at < 1e4;
       const parent = owner && BrowserWindow.fromWebContents(owner) || win;
       const pick = await pickCaptureSource(parent, {
         audio: req.audioRequested,
@@ -80,6 +104,11 @@ function setUpSession() {
         icon: ICON
       });
       if (!pick) return deny();
+      // Studio asked for this to be remembered: the same screen or window comes back the next time it opens.
+      if (remember) {
+        settings.capturePicks = rememberPick(settings.capturePicks, pc.key, { id: pick.source.id, name: pick.source.name, audio: pick.audio }, Date.now());
+        saveSettings(settings);
+      }
       cb(pick.audio ? { video: pick.source, audio: "loopback" } : { video: pick.source });
     })().catch(deny);
   });
@@ -118,6 +147,49 @@ function setUpBridge() {
     const owner = sender(e);
     if (!sources.frameOf(owner, String(id))) return false;
     pendingAudio = { owner, id: String(id), at: Date.now(), hear: o?.hear === true };
+    return true;
+  });
+  // Screen shares the app remembers: next(key) before Studio's share picker, restore(key) when Studio opens again.
+  ipcMain.handle("capture:next", (e, key) => {
+    const owner = sender(e);
+    if (!captureKeyOk(key)) return false;
+    pendingCapture = { owner, key, at: Date.now() };
+    return true;
+  });
+  ipcMain.handle("capture:restore", async (e, key) => {
+    sender(e);
+    const pick = captureKeyOk(key) ? settings.capturePicks[key] : void 0;
+    if (!pick) return null;
+    const own = new Set(BrowserWindow.getAllWindows().map((w) => w.getMediaSourceId()));
+    const list = await desktopCapturer.getSources({ types: [kindOf(pick.id)], thumbnailSize: { width: 0, height: 0 } }).then((all) => all.filter((s) => !own.has(s.id))).catch(() => []);
+    const s = findAgain(pick, list);
+    // System sound comes along on Windows only (as in the picker).
+    return s ? { sourceId: s.id, audio: pick.audio && process.platform === "win32" } : null;
+  });
+  // The agent's talk key while another app (a game) has focus: one page per key, let go when that page reloads or closes.
+  ipcMain.handle("shortcut:register", (e, accel) => {
+    const owner = sender(e);
+    if (!accelOk(accel)) return false;
+    if (shortcuts.has(accel)) {
+      globalShortcut.unregister(electronAccel(accel));
+      shortcuts.delete(accel);
+    } else if (shortcuts.size >= MAX_SHORTCUTS) return false;
+    let ok = false;
+    try {
+      ok = globalShortcut.register(electronAccel(accel), () => {
+        if (!owner.isDestroyed()) owner.send("shortcut:press", accel);
+      });
+    } catch {
+      /* not a key Electron knows */
+    }
+    if (ok) shortcuts.set(accel, owner);
+    return ok;
+  });
+  ipcMain.handle("shortcut:unregister", (e, accel) => {
+    const owner = sender(e);
+    if (shortcuts.get(accel) !== owner) return false;
+    globalShortcut.unregister(electronAccel(accel));
+    shortcuts.delete(accel);
     return true;
   });
   ipcMain.handle("obs:list", (e) => (sender(e), obs.collections()));
@@ -194,11 +266,13 @@ function watch(wc) {
   });
   wc.on("destroyed", () => {
     sources.closeAllFor(wc);
+    dropShortcuts(wc);
     if (menuItems.delete(wc)) buildMenu();
   });
   wc.on("did-start-navigation", (d) => {
     if (!d.isMainFrame || d.isSameDocument) return;
     sources.closeAllFor(wc);
+    dropShortcuts(wc);
     if (menuItems.delete(wc)) buildMenu();
   });
 }
@@ -367,6 +441,7 @@ app.whenReady().then(() => {
     if (!win) createWindow();
   });
 });
+app.on("will-quit", () => globalShortcut.unregisterAll());
 app.on("window-all-closed", () => {
   if (updates?.restarting) return updates.install();
   if (process.platform !== "darwin") app.quit();

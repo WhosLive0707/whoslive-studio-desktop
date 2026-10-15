@@ -1,6 +1,7 @@
 import { app } from "electron";
 import fs from "node:fs";
 import path from "node:path";
+import { cleanPicks } from "./captureMemory.js";
 import { DATA_DIR } from "./names.js";
 import { cleanStudioUrl, DEFAULT_STUDIO_URL, movedStudioUrl } from "./studio.js";
 
@@ -25,9 +26,11 @@ export function loadSettings() {
       bounds: cleanBounds(j["bounds"]),
       maximized: j["maximized"] === true,
       localPages: pages.slice(-MAX_LOCAL_PAGES),
+      // The screen or window each of Studio's screen shares showed (captureMemory.js).
+      capturePicks: cleanPicks(j["capturePicks"]),
     };
   } catch {
-    return { studioUrl: DEFAULT_STUDIO_URL, bounds: null, maximized: false, localPages: [] };
+    return { studioUrl: DEFAULT_STUDIO_URL, bounds: null, maximized: false, localPages: [], capturePicks: {} };
   }
 }
 
