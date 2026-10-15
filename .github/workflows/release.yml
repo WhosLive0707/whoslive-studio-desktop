@@ -1,8 +1,8 @@
 name: release
 
-# main builds WhosLive Studio (opens studio.whoslive.io) and publishes it as release v<version>, which becomes
-# GitHub's "latest": the download link and the update feed every installed copy checks. A version that is already
-# released is built but not published, so bump package.json to ship.
+# main builds WhosLive Studio (opens studio.whoslive.io) and publishes every build as a new release v<version>, which
+# becomes GitHub's "latest": the download link and the update feed every installed copy checks. The version is
+# package.json's, or one patch past the newest release when that one is taken (next-version.mjs).
 # develop builds WhosLive Studio Dev (opens dev-studio.whoslive.io) as <version>-dev.<run> and replaces the assets on
 # the fixed "dev" pre-release, which is the dev download link and the dev app's update feed.
 on:
@@ -39,16 +39,14 @@ jobs:
         run: |
           base=$(node -p "require('./package.json').version")
           if [ "$WL_CHANNEL" = prod ]; then
-            v=$base
-            if gh release view "v$v" >/dev/null 2>&1; then publish=false; else publish=true; fi
+            tags=$(gh release list --exclude-pre-releases --limit 1000 --json tagName -q '.[].tagName')
+            v=$(node next-version.mjs "$base" $tags)
           else
             v="$base-dev.$GITHUB_RUN_NUMBER"
-            npm version --no-git-tag-version "$v"
-            publish=true
           fi
+          npm version --no-git-tag-version --allow-same-version "$v"
           echo "version=$v" >> "$GITHUB_OUTPUT"
-          echo "publish=$publish" >> "$GITHUB_OUTPUT"
-          echo "$WL_CHANNEL $v, publish: $publish"
+          echo "$WL_CHANNEL $v"
 
       - run: npm run dist
 
@@ -64,7 +62,7 @@ jobs:
           grep -q "path: $exe" release/latest.yml
 
       - name: Publish prod
-        if: env.WL_CHANNEL == 'prod' && steps.v.outputs.publish == 'true'
+        if: env.WL_CHANNEL == 'prod'
         env:
           V: ${{ steps.v.outputs.version }}
         run: |
