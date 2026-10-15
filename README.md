@@ -41,7 +41,7 @@ WL_CHANNEL=prod npm run dist       # Windows installer into release/
 
 `.github/workflows/release.yml` builds on Windows on every push to `main` or `develop`.
 
-- `main`: publishes release `v<version>` from `package.json` as GitHub's latest, which is the download link and the update feed of every installed copy. A version already released is built but not published, so bump `version` to ship.
+- `main`: every push publishes a new release as GitHub's latest, which is the download link and the update feed of every installed copy. It is `v<version>` from `package.json`, or one patch past the newest release when that version is taken, so no bump is needed to ship; bump `version` to start a new minor or major.
 - `develop`: builds `<version>-dev.<run>` and replaces the files on the `dev` pre-release, which is the dev app's download link and update feed.
 
 Prod keeps the appId `io.whoslive.studio` that 0.1.1 shipped with: change it and updates install a second copy instead of replacing the first.
