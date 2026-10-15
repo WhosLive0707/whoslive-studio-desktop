@@ -23,6 +23,11 @@ itself the next time Studio opens: no chooser. A window that was closed, or a na
 isn't guessed: Studio shows that share's "Share again" instead. `src/captureMemory.js`; the bridge is `capture.next`
 and `capture.restore` in `src/preload.js`.
 
+## Talk key
+
+Studio registers the agent's talk key with the app (`shortcuts.register` in `src/preload.js`) so it works while a game
+has focus. A key another app already holds isn't taken from it, and a page's keys are let go when it reloads or closes.
+
 ## Building
 
 ```

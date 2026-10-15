@@ -1,4 +1,4 @@
-import { app, BrowserWindow, desktopCapturer, dialog, ipcMain, Menu, session, shell, webContents } from "electron";
+import { app, BrowserWindow, desktopCapturer, dialog, globalShortcut, ipcMain, Menu, session, shell, webContents } from "electron";
 import { autoUpdater } from "electron-updater";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -38,6 +38,24 @@ const obs = new ObsReader();
 let pendingAudio = null;
 /** The next screen share's picker is for this capture of Studio's: what's picked is remembered (capture.next). */
 let pendingCapture = null;
+/** Global shortcuts Studio registered (the agent's talk key), and the page each one presses. */
+const shortcuts = new Map();
+const MAX_SHORTCUTS = 4;
+const accelOk = (a) => typeof a === "string" && /^[\w+]{1,60}$/.test(a);
+/** Studio names keys as the browser does (KeyboardEvent.code); Electron's accelerators call some of them otherwise. */
+const KEY_NAMES = {
+  Backquote: "`", Minus: "-", Equal: "=", BracketLeft: "[", BracketRight: "]", Backslash: "\\", Semicolon: ";", Quote: "'",
+  Comma: ",", Period: ".", Slash: "/", ArrowUp: "Up", ArrowDown: "Down", ArrowLeft: "Left", ArrowRight: "Right",
+  NumpadAdd: "numadd", NumpadSubtract: "numsub", NumpadMultiply: "nummult", NumpadDivide: "numdiv", NumpadDecimal: "numdec"
+};
+const electronAccel = (a) => a.split("+").map((k) => KEY_NAMES[k] ?? k.replace(/^Numpad(\d)$/, "num$1")).join("+");
+function dropShortcuts(wc) {
+  for (const [a, owner] of shortcuts) {
+    if (owner !== wc) continue;
+    globalShortcut.unregister(electronAccel(a));
+    shortcuts.delete(a);
+  }
+}
 const menuItems = new Map();
 if (!app.requestSingleInstanceLock()) app.quit();
 app.on("second-instance", () => {
@@ -148,6 +166,32 @@ function setUpBridge() {
     // System sound comes along on Windows only (as in the picker).
     return s ? { sourceId: s.id, audio: pick.audio && process.platform === "win32" } : null;
   });
+  // The agent's talk key while another app (a game) has focus: one page per key, let go when that page reloads or closes.
+  ipcMain.handle("shortcut:register", (e, accel) => {
+    const owner = sender(e);
+    if (!accelOk(accel)) return false;
+    if (shortcuts.has(accel)) {
+      globalShortcut.unregister(electronAccel(accel));
+      shortcuts.delete(accel);
+    } else if (shortcuts.size >= MAX_SHORTCUTS) return false;
+    let ok = false;
+    try {
+      ok = globalShortcut.register(electronAccel(accel), () => {
+        if (!owner.isDestroyed()) owner.send("shortcut:press", accel);
+      });
+    } catch {
+      /* not a key Electron knows */
+    }
+    if (ok) shortcuts.set(accel, owner);
+    return ok;
+  });
+  ipcMain.handle("shortcut:unregister", (e, accel) => {
+    const owner = sender(e);
+    if (shortcuts.get(accel) !== owner) return false;
+    globalShortcut.unregister(electronAccel(accel));
+    shortcuts.delete(accel);
+    return true;
+  });
   ipcMain.handle("obs:list", (e) => (sender(e), obs.collections()));
   ipcMain.handle("obs:read", async (e, file2) => {
     sender(e);
@@ -222,11 +266,13 @@ function watch(wc) {
   });
   wc.on("destroyed", () => {
     sources.closeAllFor(wc);
+    dropShortcuts(wc);
     if (menuItems.delete(wc)) buildMenu();
   });
   wc.on("did-start-navigation", (d) => {
     if (!d.isMainFrame || d.isSameDocument) return;
     sources.closeAllFor(wc);
+    dropShortcuts(wc);
     if (menuItems.delete(wc)) buildMenu();
   });
 }
@@ -395,6 +441,7 @@ app.whenReady().then(() => {
     if (!win) createWindow();
   });
 });
+app.on("will-quit", () => globalShortcut.unregisterAll());
 app.on("window-all-closed", () => {
   if (updates?.restarting) return updates.install();
   if (process.platform !== "darwin") app.quit();
