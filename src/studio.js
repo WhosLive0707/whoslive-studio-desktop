@@ -3,8 +3,9 @@ import { CHANNEL } from "./channel.js";
 export const DEFAULT_STUDIO_URL = CHANNEL.studioUrl;
 export const MENU_ACTIONS = { "obs-import": "Import scenes from OBS…" };
 
-// The WhosLive Lovable project's published Studio: every Publish there reaches the app with no reinstall.
-const PROD_URL = "https://whoslivebeta.lovable.app/studio";
+// The WhosLive Lovable project's published Studio (its custom domain): every Publish there reaches the app with no
+// reinstall.
+const PROD_URL = "https://beta.whoslive.io/studio";
 const DEV_URL = "https://dev-studio.whoslive.io/studio";
 
 export const STUDIO_CHOICES = [
@@ -18,13 +19,14 @@ export const STUDIO_CHOICES = [
  */
 const MOVED = {
   "https://whoslive-studio.lovable.app/studio": DEFAULT_STUDIO_URL,
+  "https://whoslivebeta.lovable.app/studio": DEFAULT_STUDIO_URL,
   "https://studio.whoslive.io/studio": DEFAULT_STUDIO_URL,
   "https://studio.whoslive.io/": DEFAULT_STUDIO_URL,
   "https://dev-studio.whoslive.io/": DEV_URL,
 };
 
 /** WhosLive's own addresses, trusted wherever Studio moves between them (whoslive.io takes over after the merge). */
-const WHOSLIVE_ORIGINS = ["https://whoslive.io", "https://www.whoslive.io", "https://whoslivebeta.lovable.app"];
+const WHOSLIVE_ORIGINS = ["https://beta.whoslive.io", "https://whoslive.io", "https://www.whoslive.io", "https://whoslivebeta.lovable.app"];
 export const movedStudioUrl = (url) => MOVED[url] ?? url;
 
 export function cleanStudioUrl(raw) {
