@@ -48,7 +48,12 @@ jobs:
           echo "version=$v" >> "$GITHUB_OUTPUT"
           echo "$WL_CHANNEL $v"
 
-      - run: npm run dist
+      - name: Build and sign the installer
+        run: npm run dist
+        env:
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
 
       # The update feed must name this build, or installed copies never see it.
       - name: Check the installer and its feed
