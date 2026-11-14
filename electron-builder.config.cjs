@@ -14,7 +14,17 @@ module.exports = {
   directories: { output: "release", buildResources: "assets" },
   files: ["dist/**/*", "package.json"],
   extraMetadata: { name: ch.name, productName: ch.productName },
-  win: { target: [{ target: "nsis", arch: ["x64"] }], icon: "assets/icon.png" },
+  win: {
+    target: [{ target: "nsis", arch: ["x64"] }],
+    icon: "assets/icon.png",
+    // Signed with Azure Artifact Signing; electron-builder reads AZURE_TENANT_ID, AZURE_CLIENT_ID and AZURE_CLIENT_SECRET from the environment.
+    azureSignOptions: {
+      publisherName: "WhosLive Inc.",
+      endpoint: "https://eus.codesigning.azure.net",
+      codeSigningAccountName: "whoslivesigning",
+      certificateProfileName: "WhosLiveStudio",
+    },
+  },
   nsis: { artifactName: ch.artifact },
   detectUpdateChannel: false,
   publish:
