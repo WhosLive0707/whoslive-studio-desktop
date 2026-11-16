@@ -23,6 +23,9 @@ const MOVED = {
   "https://studio.whoslive.io/studio": DEFAULT_STUDIO_URL,
   "https://studio.whoslive.io/": DEFAULT_STUDIO_URL,
   "https://dev-studio.whoslive.io/": DEV_URL,
+  // The test app (dev channel) always opens the real Studio: the old dev Studio address an earlier dev install saved
+  // doesn't win.
+  ...CHANNEL.appId.endsWith(".dev") ? { [DEV_URL]: DEFAULT_STUDIO_URL, "https://dev-studio.whoslive.io/": DEFAULT_STUDIO_URL } : {},
 };
 
 /** WhosLive's own addresses, trusted wherever Studio moves between them (whoslive.io takes over after the merge). */
