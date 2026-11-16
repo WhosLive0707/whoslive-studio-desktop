@@ -101,10 +101,16 @@ export class EngineClient {
 
   async call(type, args) {
     if (!(type in CALLS)) throw new Error(`Unknown engine call ${type}`);
-    if (type !== "init" && !this.proc) {
+    // Where OBS is and its data folder come from the app, never from the page: Studio's init carries no settings.
+    if (type === "init") return this.init();
+    if (!this.proc) {
       if (type === "stopStream") return { ok: true };
       await this.init();
     }
+    return this.post(type, args);
+  }
+
+  async post(type, args) {
     const proc = await this.start();
     const id = ++this.seq;
     return new Promise((resolve, reject) => {
@@ -119,7 +125,7 @@ export class EngineClient {
 
   init() {
     if (!this.initDone) {
-      this.initDone = this.call("init", { dir: engineDir(), appData: path.join(app.getPath("userData"), "engine"), version: this.version }).catch((e) => {
+      this.initDone = this.post("init", { dir: engineDir(), appData: path.join(app.getPath("userData"), "engine"), version: this.version }).catch((e) => {
         this.initDone = null;
         throw e;
       });
