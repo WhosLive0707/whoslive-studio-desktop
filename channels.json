@@ -11,6 +11,6 @@
     "name": "@studio/desktop-dev",
     "productName": "WhosLive Studio Dev",
     "artifact": "WhosLive-Studio-Dev-Setup.exe",
-    "studioUrl": "https://dev-studio.whoslive.io/studio"
+    "studioUrl": "https://beta.whoslive.io/studio"
   }
 }
