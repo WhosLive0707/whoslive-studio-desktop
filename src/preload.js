@@ -9,6 +9,11 @@ if (hello?.trusted) {
   const shortcutFns = new Map();
   ipcRenderer.on("shortcut:press", (_e, accel) => shortcutFns.get(accel)?.());
   let menuFn = null;
+  const engineFns = new Set();
+  ipcRenderer.on("engine:event", (_e, name, data) => {
+    for (const f of engineFns) f(name, data);
+  });
+  const engineCall = (type, args) => ipcRenderer.invoke("engine:call", type, args);
   ipcRenderer.on("desktop:menu", (_e, action) => menuFn?.(action));
   contextBridge.exposeInMainWorld("whosliveDesktop", {
     version: hello.version,
@@ -47,6 +52,30 @@ if (hello?.trusted) {
       next: (key) => ipcRenderer.invoke("capture:next", key),
       restore: (key) => ipcRenderer.invoke("capture:restore", key)
     },
+    /** OBS's engine (docs/native-engine.md): capture, mixing, encoding and the stream to the relay, natively.
+     *  null when this install doesn't have it; Studio then keeps its browser capture and encoder. */
+    engine: hello.engine
+      ? {
+          version: 1,
+          start: () => engineCall("init"),
+          devices: () => engineCall("devices"),
+          setScene: (scene) => engineCall("setScene", scene),
+          setAudio: (map) => engineCall("setAudio", map),
+          /** rect: the preview tile in CSS pixels of this page; show false hides the native preview. */
+          preview: (rect, show = true) => engineCall("preview", { rect, show }),
+          stream: {
+            start: (cfg) => engineCall("startStream", cfg),
+            reconnect: (url) => engineCall("reconnectStream", { url }),
+            stop: () => engineCall("stopStream")
+          },
+          /** Events: open, relay, closed, format, output, stats, levels, encoder-failed, source-error, crashed. */
+          onEvent: (fn) => {
+            if (typeof fn !== "function") return () => void 0;
+            engineFns.add(fn);
+            return () => void engineFns.delete(fn);
+          }
+        }
+      : null,
     /** Global shortcuts (the agent's talk key while a game has focus). register resolves false when the key is
      *  taken by another app or isn't one Electron knows. */
     shortcuts: {

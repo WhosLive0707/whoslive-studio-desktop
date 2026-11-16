@@ -5,6 +5,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { BrowserSources } from "./browserSources.js";
 import { captureKeyOk, findAgain, rememberPick } from "./captureMemory.js";
 import { CHANNEL } from "./channel.js";
+import { EngineClient, engineAvailable } from "./engine/client.js";
 import { AUTOPLAY_FREE, UA_FALLBACK } from "./names.js";
 import { ObsReader } from "./obs.js";
 import { kindOf, pickCaptureSource } from "./picker.js";
@@ -35,6 +36,9 @@ let win = null;
 let updates = null;
 let sources;
 const obs = new ObsReader();
+/** OBS's engine (libobs) for capture, encoding and streaming in the downloadable app: started on Studio's first call. */
+let engine = null;
+const useEngine = () => engine ??= new EngineClient({ version: app.getVersion(), log: (stage, level, msg) => { if (level === "error") console.error(`[engine] ${stage}: ${msg}`); } });
 let pendingAudio = null;
 /** The next screen share's picker is for this capture of Studio's: what's picked is remembered (capture.next). */
 let pendingCapture = null;
@@ -129,12 +133,21 @@ function sender(e) {
 }
 function setUpBridge() {
   ipcMain.on("desktop:hello", (e) => {
-    e.returnValue = { trusted: isTrusted(e.senderFrame?.url), version: app.getVersion(), platform: process.platform };
+    e.returnValue = { trusted: isTrusted(e.senderFrame?.url), version: app.getVersion(), platform: process.platform, engine: engineAvailable() };
   });
   ipcMain.handle("bs:open", (e, o) => {
     const owner = sender(e);
     if (!localPageOk(o?.url)) throw new Error("A local page opens only after an OBS import brought it in");
     return { id: sources.open(owner, o ?? {}) };
+  });
+  // The native engine (src/engine): Studio's calls, from the trusted Studio page only. The preview's window handle
+  // and its place in physical pixels come from here, never from the page.
+  ipcMain.handle("engine:call", async (e, type, args) => {
+    const owner = sender(e);
+    if (!engineAvailable()) throw new Error("The engine isn't part of this install");
+    const client = useEngine();
+    client.setOwner(owner);
+    return client.call(String(type), type === "preview" ? client.previewArgs(owner, args ?? {}) : args ?? {});
   });
   ipcMain.handle("bs:update", (e, id, o) => {
     const owner = sender(e);
@@ -441,7 +454,10 @@ app.whenReady().then(() => {
     if (!win) createWindow();
   });
 });
-app.on("will-quit", () => globalShortcut.unregisterAll());
+app.on("will-quit", () => {
+  globalShortcut.unregisterAll();
+  engine?.stop();
+});
 app.on("window-all-closed", () => {
   if (updates?.restarting) return updates.install();
   if (process.platform !== "darwin") app.quit();
