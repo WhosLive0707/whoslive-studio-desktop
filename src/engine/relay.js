@@ -30,7 +30,7 @@ export function relayUrl(url) {
 
 /** Only WhosLive's relay (or a local one in tests). */
 export function relayUrlOk(url) {
-  return typeof url === "string" && (/^wss:\/\/relay\.whoslive\.io\/[^\s]*$/.test(url) || /^wss?:\/\/127\.0\.0\.1:\d+\/[^\s]*$/.test(url));
+  return typeof url === "string" && (/^wss:\/\/(studio-)?relay\.whoslive\.io\/[^\s]*$/.test(url) || /^wss?:\/\/127\.0\.0\.1:\d+\/[^\s]*$/.test(url));
 }
 
 /** A free TCP port on 127.0.0.1. */
