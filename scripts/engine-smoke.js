@@ -26,7 +26,8 @@ app.whenReady().then(async () => {
     client.setOwner(win.webContents);
     win.webContents.send = (_ch, event, data) => events.push({ event, data });
     const t0 = Date.now();
-    await client.init();
+    // Started the way Studio starts it: an init with no settings from the page.
+    await client.call("init", {});
     step(`engine started in ${Date.now() - t0} ms`);
     const dev = await client.call("devices");
     step(`devices: ${dev.cameras.length} cameras, ${dev.mics.length} mics, ${dev.monitors.length} monitors; encoders ${dev.encoders.map((e) => e.id).join(", ")}`);
