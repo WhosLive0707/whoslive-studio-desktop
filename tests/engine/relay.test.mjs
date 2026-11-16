@@ -14,6 +14,8 @@ test("ffmpeg listens on this PC only and copies the stream into live Matroska", 
 
 test("only WhosLive's relay (or a local test relay) is accepted; AAC is announced", () => {
   assert.equal(relayUrlOk("wss://relay.whoslive.io/ingest?t=x"), true);
+  assert.equal(relayUrlOk("wss://studio-relay.whoslive.io/ingest?t=x"), true);
+  assert.equal(relayUrlOk("wss://relay.whoslive.io.evil.example/ingest?t=x"), false);
   assert.equal(relayUrlOk("wss://evil.example/ingest?t=x"), false);
   assert.equal(relayUrlOk("ws://127.0.0.1:9000/ingest?t=x"), true);
   assert.equal(relayUrl("wss://relay.whoslive.io/ingest?t=x"), "wss://relay.whoslive.io/ingest?t=x&a=aac");
