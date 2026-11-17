@@ -184,3 +184,71 @@ test("a failed GPU encoder: the link closes for a reconnect, and the reconnect u
   await h.call("stopStream", {});
   await h.until(() => h.events.filter((e) => e.event === "closed").length === 2, 6000);
 });
+
+test("the vertical picture: its own canvas and layers, the main picture's copies, its own stream, then gone", { skip }, async (t) => {
+  const h = startHost();
+  t.after(() => h.child.kill());
+  await h.until(() => h.events.find((e) => e.event === "hello"));
+  await h.call("init", { dir: mock, appData: tmpdir(), version: "test" });
+  await h.call("setScene", scene());
+  const vscene = {
+    canvas: { width: 1080, height: 1920, fps: 30 },
+    sources: [
+      { id: "wl-program-blur", kind: "program-blur" },
+      { id: "wl-program", kind: "program" },
+      { id: "cam", kind: "camera", device: "Cam Link 4K:\\\\?\\usb#1" },
+    ],
+    layers: [
+      { id: "V-bg", source: "wl-program-blur", x: 0, y: 0, w: 1080, h: 1920, fit: "cover" },
+      { id: "V-main", source: "wl-program", x: 0, y: 656, w: 1080, h: 608, fit: "contain" },
+      { id: "V-cam", source: "cam", x: 0, y: 1300, w: 1080, h: 608, fit: "cover" },
+    ],
+  };
+  assert.deepEqual(await h.call("setVerticalScene", vscene), { changed: true });
+  let log = h.osnLog();
+  // The vertical layers live in their own scene, nested on the vertical canvas; each program copy is a scene too.
+  assert.ok(log.some((e) => e[0] === "scene" && e[1] === "wl-vertical" && e[2] === true));
+  assert.ok(log.some((e) => e[0] === "add-item" && e[1] === "wl-vertical" && e[2] === "wl-program"));
+  assert.ok(log.some((e) => e[0] === "scene" && e[1] === "wl-wl-program" && e[2] === true));
+  // The camera is shared with the main picture: no second camera source.
+  assert.equal(log.filter((e) => e[0] === "input" && e[1] === "dshow_input").length, 1);
+  // The main picture's copy holds the main layers, placed where they show in the box (contain: x0.5625).
+  const copied = log.filter((e) => e[0] === "add-item" && e[2] === "wl-wl-program").map((e) => e[1]);
+  assert.deepEqual(copied, ["wl-game", "wl-cam", "wl-cam"]);
+  const camInCopy = log.filter((e) => e[0] === "transform" && e[1] === "wl-cam" && Math.abs(e[2].bounds.x - 400 * 0.5625) < 0.01);
+  assert.ok(camInCopy.length >= 1);
+  // The program items sit at their boxes, cropped to them; the backdrop is scaled back up.
+  const prog = log.filter((e) => e[0] === "transform" && e[1] === "wl-wl-program").at(-1)[2];
+  assert.deepEqual(prog.position, { x: 0, y: 656 });
+  assert.equal(prog.crop.bottom, 1920 - 608);
+  const blur = log.filter((e) => e[0] === "transform" && e[1] === "wl-wl-program-blur").at(-1)[2];
+  assert.equal(blur.scale.x, 16);
+
+  // Moving the main camera moves its copy too.
+  await h.call("setScene", scene(1000));
+  log = h.osnLog();
+  assert.ok(log.some((e) => e[0] === "transform" && e[1] === "wl-cam" && Math.abs(e[2].position.x - 1000 * 0.5625) < 0.01));
+
+  // Both pictures stream, each to its own relay link; the vertical one's events say so.
+  const relay = await startRelay();
+  t.after(() => relay.wss.close());
+  await h.call("startStream", { url: `ws://127.0.0.1:${relay.port}/ingest?t=main`, kbps: 6000 });
+  const v = await h.call("startStream", { url: `ws://127.0.0.1:${relay.port}/ingest?t=vert`, kbps: 4000, canvas: "vertical" });
+  assert.ok(v.encoder.id);
+  await h.until(() => relay.got.urls.length === 2);
+  assert.ok(relay.got.urls.some((u) => /t=vert&a=aac$/.test(u)));
+  await h.until(() => h.events.find((e) => e.event === "open" && e.data.canvas === "vertical"));
+  await h.until(() => h.events.find((e) => e.event === "stats" && e.data.canvas === "vertical" && e.data.live));
+  await assert.rejects(h.call("setVerticalScene", { off: true }), /live/);
+  await h.call("stopStream", { canvas: "vertical" });
+  await h.until(() => h.events.find((e) => e.event === "closed" && e.data.canvas === "vertical"), 6000);
+  assert.ok(!h.events.some((e) => e.event === "closed" && e.data.canvas === "main"));
+  await h.call("stopStream", {});
+  await h.until(() => h.events.find((e) => e.event === "closed" && e.data.canvas === "main"), 6000);
+
+  // Off: the vertical items, copies and canvas go; the camera stays for the main picture.
+  assert.deepEqual(await h.call("setVerticalScene", { off: true }), { changed: true });
+  log = h.osnLog();
+  assert.ok(log.some((e) => e[0] === "video-destroy"));
+  assert.ok(!log.some((e) => e[0] === "release" && e[1] === "wl-cam"));
+});
