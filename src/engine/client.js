@@ -117,7 +117,7 @@ export class EngineClient {
       const timer = setTimeout(() => {
         this.waiting.delete(id);
         reject(new Error(`The engine didn't answer (${type})`));
-      }, CALLS[type]);
+      }, CALLS[type] ?? 30_000);
       this.waiting.set(id, { resolve, reject, timer });
       proc.postMessage({ id, type, args });
     });
