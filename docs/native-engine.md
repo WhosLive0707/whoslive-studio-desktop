@@ -114,3 +114,21 @@ only builds on `feature/native-engine*` branches as an unpublished test artifact
   - capture cards;
   - the preview's position at 125% and 150% Windows scaling;
   - an end-to-end stream to Twitch and YouTube through the real relay.
+
+## Overlays
+
+The engine captures game, screen, camera and browser-source layers itself. Everything else Studio draws (text, chat,
+alerts, images, widgets, the theme, the agent, the Free plan's mark) is drawn by Studio's own compositor in see-through
+overlay pages that the engine shows as browser sources (`kind: "overlay"`), the way OBS shows a StreamElements overlay.
+Studio splits its scene into planes: each run of layers the engine doesn't capture is one plane, in the same order, and
+there's always a top plane.
+
+`src/engine/overlayFeed.js` serves this on 127.0.0.1 only:
+
+- `/overlay.html` (`overlayPage.js`): starts Studio's compositor script on a see-through canvas and passes it what
+  Studio sends. Query: `worker` (Studio's script path), `key`, `w`, `h`, `fps`, `plane`.
+- `/assets/<name>.js`: Studio's built scripts, passed on from Studio's site (the origin of the Studio page that asked).
+- `/feed?key=…`: a WebSocket with Studio's compositor messages (`engine.overlay.post`), pictures as base64. A page that
+  connects late gets the picture as it is first (scene, theme, pictures, chat), then every change.
+
+Studio: `whosliveDesktop.engine.overlay.endpoint()` gives `{ port, key }`; `post(msg)` passes a compositor message on.
