@@ -140,7 +140,7 @@ module.exports = {
   Global: { setOutputSource() {}, cpuPercentage: 3.2, currentFrameRate: 60, averageFrameRenderTime: 1.1, laggedFrames: 0 },
   InputFactory: { create: (id, name, s) => new Input(id, name, s) },
   VolmeterFactory: { create: () => ({ attach() {}, destroy() {} }) },
-  FilterFactory: { create: (id, name, s) => ({ id, name, settings: { ...s }, update(x) { Object.assign(this.settings, x); }, release() {} }) },
+  FilterFactory: { create: (id, name, s) => ({ id, name, settings: { ...s }, update(x) { Object.assign(this.settings, x); log.push(["filter", name, { ...this.settings }]); }, release() {} }) },
   VideoEncoderFactory: {
     types: () => ["obs_x264", "obs_nvenc_h264_tex"],
     create: (id, name, settings) => ({ id, name, settings, lastError: "", release() {} }),
