@@ -24,7 +24,7 @@ export function engineAvailable() {
 }
 
 /** Calls Studio may make, and how long each may take (a stream start waits for the relay). */
-const CALLS = { init: 60_000, devices: 20_000, setScene: 10_000, setAudio: 5_000, preview: 5_000, startStream: 60_000, stopStream: 10_000, reconnectStream: 60_000 };
+const CALLS = { init: 60_000, devices: 20_000, setScene: 10_000, setVerticalScene: 10_000, setAudio: 5_000, preview: 5_000, startStream: 60_000, stopStream: 10_000, reconnectStream: 60_000 };
 
 export class EngineClient {
   constructor({ version, log = () => void 0 }) {
