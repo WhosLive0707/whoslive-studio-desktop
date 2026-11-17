@@ -12,7 +12,7 @@ import { encoderInfo, encoderSettings, pickEncoder } from "./encoders.js";
 import { itemTransform, levelToFactor, sameTransform, smoothFactor } from "./layout.js";
 import { diffScene, emptyDiff, planScene } from "./scene.js";
 import { RelayLink } from "./relay.js";
-import { programItem, programLayer, programMap } from "./vertical.js";
+import { clipLayer, programItem, programLayer, programMap, programRegion } from "./vertical.js";
 
 /* global require */
 // Only ever runs bundled (dist/engine-host.cjs, CommonJS); obs-studio-node is loaded from its own folder at run time.
@@ -209,7 +209,8 @@ function devices() {
  * shared: one OBS input per Studio source, whichever pictures show it. */
 const mainCol = () => ({ name: "main", scene: st.scene, video: st.ctx, items: st.items });
 const vCol = () => ({ name: "vertical", scene: st.vscene, video: st.vctx, items: st.vitems });
-const progCol = (p) => ({ name: "program", scene: p.scene, video: st.vctx, items: p.items });
+/** A program copy: its layers are clipped to `region`, the part of the copy that shows (vertical.js). */
+const progCol = (p, region) => ({ name: "program", scene: p.scene, video: st.vctx, items: p.items, region });
 const allItems = () => [st.items, st.vitems, ...[...st.progs.values()].map((p) => p.items)];
 
 /** Every input the pictures need: the main scene's, then the vertical one's. */
@@ -257,9 +258,11 @@ function syncLayers(col, layers) {
   }
   for (const l of layers) {
     const it = col.items.get(l.id);
+    const regionMoved = !!it && JSON.stringify(it.region ?? null) !== JSON.stringify(col.region ?? null);
+    if (it) it.region = col.region ?? null;
     if (!it) {
       if (addItem(col, l)) changed = true;
-    } else if (JSON.stringify(it.layer) !== JSON.stringify(l)) {
+    } else if (regionMoved || JSON.stringify(it.layer) !== JSON.stringify(l)) {
       it.layer = l;
       applyTransform(it, true);
       if (col.name === "main") setOpacity(l);
@@ -280,7 +283,8 @@ function syncPrograms() {
     const box = st.vplan?.layers.find((l) => l.source === id) ?? null;
     const map = box && st.plan ? programMap(box, st.plan.canvas) : null;
     const layers = map ? st.plan.layers.map((l) => programLayer(l, map, p.blur)) : [];
-    if (syncLayers(progCol(p), layers)) changed = true;
+    const region = box ? programRegion(box, st.vplan.canvas, p.blur) : null;
+    if (syncLayers(progCol(p, region), layers)) changed = true;
   }
   return changed;
 }
@@ -367,11 +371,7 @@ function createInput(osn, input) {
         const f = osn.FilterFactory.create("color_filter_v2", obsName(`${input.id}-dim`), { color_multiply: 0xffa6a6a6 });
         scene.source.addFilter(f);
       }
-      // Clipped to its box by a crop filter, by width and height: an item's crop goes by the size OBS gives a nested
-      // scene, which on the vertical canvas isn't the copy's own (the smoke test showed the box cropped away).
-      const clip = osn.FilterFactory.create("crop_filter", obsName(`${input.id}-clip`), { relative: false, left: 0, top: 0, cx: 1080, cy: 1920 });
-      scene.source.addFilter(clip);
-      st.progs.set(input.id, { scene, blur, clip, items: new Map() });
+      st.progs.set(input.id, { scene, blur, items: new Map() });
       st.inputs.set(input.id, scene.source);
       return;
     }
@@ -423,7 +423,7 @@ function addItem(col, layer) {
   } catch {
     /* a single-canvas build of obs-studio-node renders every item on its one canvas */
   }
-  const it = { item, layer, last: null, input, prog: col.name === "vertical" ? (st.progs.get(layer.source) ?? null) : null };
+  const it = { item, layer, last: null, input, region: col.region ?? null, prog: col.name === "vertical" ? (st.progs.get(layer.source) ?? null) : null };
   col.items.set(layer.id, it);
   applyTransform(it, true);
   if (col.name === "main") setOpacity(layer);
@@ -468,8 +468,10 @@ function reorder(col, order) {
 function applyTransform(it, force = false) {
   if (it.prog) return placeProgram(it, force);
   const size = st.sizes.get(it.layer.source);
-  const factor = it.layer.sound ? (st.factors.get(it.layer.id) ?? 1) : 1;
-  const t = itemTransform(it.layer, size, factor);
+  // In a program copy, the layer clipped to the part that shows (nothing of it: hidden).
+  const layer = it.region ? (clipLayer(it.layer, size, it.region) ?? { ...it.layer, sound: null, visible: false }) : it.layer;
+  const factor = layer.sound ? (st.factors.get(it.layer.id) ?? 1) : 1;
+  const t = itemTransform(layer, size, factor);
   if (!force && sameTransform(it.last, t)) return;
   const item = it.item;
   item.deferUpdateBegin();
@@ -489,18 +491,13 @@ function applyTransform(it, force = false) {
   it.last = t;
 }
 
-/** A vertical "@program" layer: the main picture's copy at the layer's box, clipped to it (vertical.js). */
+/**
+ * A vertical "@program" layer: the main picture's copy at the layer's box. Not cropped: the copy's layers are already
+ * clipped to the box (vertical.js).
+ */
 function placeProgram(it, force) {
-  const canvas = st.vplan?.canvas ?? { width: 1080, height: 1920 };
-  const t = programItem(it.layer, canvas, it.prog.blur);
+  const t = programItem(it.layer, st.vplan?.canvas ?? { width: 1080, height: 1920 }, it.prog.blur);
   if (!force && JSON.stringify(it.last) === JSON.stringify(t)) return;
-  // The copy's part that shows: from its corner, the box's size (drawn smaller for the backdrop).
-  const clip = { relative: false, left: 0, top: 0, cx: Math.max(1, canvas.width - t.crop.right), cy: Math.max(1, canvas.height - t.crop.bottom) };
-  try {
-    it.prog.clip?.update(clip);
-  } catch (e) {
-    log("vertical", "warn", `clip: ${e?.message ?? e}`);
-  }
   const item = it.item;
   item.deferUpdateBegin();
   try {
