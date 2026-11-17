@@ -13,6 +13,7 @@ await build({ ...common, entryPoints: ["src/engine/host.js"], outfile: "dist/eng
 // CI's smoke test of the real engine (not packaged: electron-builder only takes what the app needs at run time).
 if (process.env.WL_SMOKE) await build({ ...common, external: ["electron", "ws"], entryPoints: ["scripts/engine-smoke.js"], outfile: "dist/engine-smoke.cjs" });
 if (process.env.WL_SMOKE) await build({ ...common, entryPoints: ["scripts/osn-experiment.js"], outfile: "dist/osn-experiment.cjs" });
+if (process.env.WL_SMOKE) await build({ ...common, entryPoints: ["scripts/osn-experiment-child.js"], outfile: "dist/osn-experiment-child.cjs" });
 for (const p of ["preload", "picker-preload", "prompt-preload"]) await build({ ...common, entryPoints: [`src/${p}.js`], outfile: `dist/${p}.cjs` });
 await cp("src/pages", "dist/pages", { recursive: true });
 await cp("assets/icon.png", "dist/icon.png");
