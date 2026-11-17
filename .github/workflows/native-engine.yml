@@ -31,6 +31,12 @@ jobs:
         run: WL_SMOKE=1 node build.mjs
       - name: Unit tests
         run: npm test
+      - name: Experiment (vertical canvas, not a test)
+        continue-on-error: true
+        timeout-minutes: 3
+        env:
+          WL_ENGINE_DIR: vendor/obs-studio-node
+        run: npx electron dist/osn-experiment.cjs
       - name: Smoke test the real engine
         env:
           WL_ENGINE_DIR: vendor/obs-studio-node
