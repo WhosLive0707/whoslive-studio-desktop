@@ -31,6 +31,9 @@ export const KINDS = {
   browser: "browser_source",
   overlay: "browser_source",
   color: "color_source_v3",
+  // The vertical picture's main picture: a private copy of the main scene (host.js), sharp or as a soft backdrop.
+  program: "scene",
+  "program-blur": "scene",
 };
 
 /** Kinds that only make sound (no scene item). */
@@ -129,6 +132,9 @@ export function toInput(src, canvas = { width: 1920, height: 1080 }) {
         webpage_control_level: 1,
       });
     }
+    case "program":
+    case "program-blur":
+      return s({});
     case "color": {
       const hex = /^#[0-9a-f]{6}$/i.test(str(src.color, 7)) ? str(src.color, 7) : "#000000";
       // OBS colors are 0xAABBGGRR.
