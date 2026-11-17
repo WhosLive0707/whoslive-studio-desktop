@@ -103,12 +103,76 @@ test("the overlay page and Studio's compositor script are served on this PC; not
   await get("/assets/compositor.worker-Ab1.js");
   assert.deepEqual(asked, ["https://beta.whoslive.io/assets/compositor.worker-Ab1.js"]);
   assert.equal((await get("/assets/missing.js")).status, 404);
+  // Anything else is Studio's site's own (here: nothing there).
   assert.equal((await get("/etc/passwd")).status, 404);
-  assert.equal((await get("/assets/..%2Fx.js")).status, 404);
+  assert.notEqual((await get("/assets/..%2Fx.js")).status, 200);
   assert.equal((await get("/assets/a.css")).status, 404);
   // A page that isn't a Studio site doesn't change where scripts come from.
   await feed.start("http://evil.example");
   await get("/assets/missing.js");
   assert.equal(asked.at(-1), "https://beta.whoslive.io/assets/missing.js");
+  feed.stop();
+});
+
+test("the 3D avatar and effects: a late page gets how they started and their latest settings, never old poses", () => {
+  const s = new OverlayState();
+  s.take({ type: "aux", kind: "avatar3d", msg: { type: "start", worker: "/assets/avatar3d.worker-x.js", width: 512, height: 512 } });
+  s.take({ type: "aux", kind: "avatar3d", msg: { type: "model", url: "/site/vrm/a.vrm", cfg: {} } });
+  s.take({ type: "aux", kind: "avatar3d", msg: { type: "model", url: "/site/vrm/b.vrm", cfg: {} } });
+  s.take({ type: "aux", kind: "avatar3d", msg: { type: "pose", pose: {} } });
+  s.take({ type: "aux", kind: "effects3d", msg: { type: "start", worker: "/assets/effects3d.worker-y.js" } });
+  s.take({ type: "aux", kind: "effects3d", msg: { type: "stop" } });
+  assert.equal(s.take({ type: "aux", kind: "nope", msg: { type: "start" } }), false);
+  s.take({ type: "vscene", scene: { id: "v" }, fade: true });
+  s.take({ type: "vplanes", planes: {} });
+  const r = s.replay();
+  const aux = r.filter((m) => m.type === "aux").map((m) => `${m.kind}:${m.msg.type}:${m.msg.url ?? ""}`);
+  assert.deepEqual(aux, ["avatar3d:start:", "avatar3d:model:/site/vrm/b.vrm"]);
+  assert.deepEqual(r.slice(-2).map((m) => m.type), ["vplanes", "vscene"]);
+  assert.equal(r.at(-1).fade, false);
+});
+
+test("a page says which it is; Studio's side of a connection reaches only that page, and the page's reaches Studio", async () => {
+  const fromPages = [];
+  const feed = new OverlayFeed({ onPage: (m) => fromPages.push(m) });
+  const { port, key } = await feed.start();
+  const a = await open(`ws://127.0.0.1:${port}/feed?key=${key}`);
+  const b = await open(`ws://127.0.0.1:${port}/feed?key=${key}`);
+  a.ws.send(JSON.stringify({ type: "hello", page: "m0" }));
+  b.ws.send(JSON.stringify({ type: "hello", page: "v1" }));
+  await until(() => fromPages.length === 2);
+  assert.deepEqual(fromPages.map((m) => m.page), ["m0", "v1"]);
+  feed.post({ type: "rtc", to: "v1", sdp: { type: "offer", sdp: "x" }, streams: {} });
+  await until(() => b.got.some((m) => m.type === "rtc"));
+  assert.ok(!a.got.some((m) => m.type === "rtc"));
+  // A page answers for itself only.
+  a.ws.send(JSON.stringify({ type: "rtc", from: "v1", sdp: { type: "answer", sdp: "spoof" } }));
+  b.ws.send(JSON.stringify({ type: "rtc", from: "v1", sdp: { type: "answer", sdp: "y" } }));
+  await until(() => fromPages.some((m) => m.type === "rtc"));
+  await new Promise((r) => setTimeout(r, 100));
+  assert.deepEqual(fromPages.filter((m) => m.type === "rtc").map((m) => m.sdp.sdp), ["y"]);
+  // Connections aren't kept for pages that come later.
+  assert.ok(!feed.state.replay().some((m) => m.type === "rtc"));
+  a.ws.close();
+  b.ws.close();
+  feed.stop();
+});
+
+test("files the 3D avatar loads from Studio's site are passed on", async () => {
+  const asked = [];
+  const fetchImpl = async (url) => {
+    asked.push(url);
+    return new Response(new Uint8Array([1, 2, 3]), { headers: { "content-type": "model/gltf-binary" } });
+  };
+  const feed = new OverlayFeed({ fetchImpl });
+  const { port } = await feed.start("https://beta.whoslive.io");
+  const r = await fetch(`http://127.0.0.1:${port}/site/vrm/starter.vrm?v=2`);
+  assert.equal(r.status, 200);
+  assert.equal(r.headers.get("content-type"), "model/gltf-binary");
+  assert.deepEqual([...new Uint8Array(await r.arrayBuffer())], [1, 2, 3]);
+  assert.deepEqual(asked, ["https://beta.whoslive.io/vrm/starter.vrm?v=2"]);
+  // Paths stay on Studio's site.
+  await fetch(`http://127.0.0.1:${port}/site/../textures/fog.png`);
+  assert.equal(asked.at(-1), "https://beta.whoslive.io/textures/fog.png");
   feed.stop();
 });
