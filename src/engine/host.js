@@ -5,6 +5,8 @@
 // in a capture driver or encoder takes down the engine, never Studio's window: client.js restarts it.
 //
 // Messages in: { id, type, args } (see HANDLERS). Replies: { id, ok, result | error }. Events out: { event, data }.
+import { mkdirSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { encoderInfo, encoderSettings, pickEncoder } from "./encoders.js";
 import { itemTransform, levelToFactor, sameTransform, smoothFactor } from "./layout.js";
@@ -814,6 +816,46 @@ const need = (fn) => (args) => {
   return fn(args);
 };
 
+/**
+ * What the engine has built, for the smoke test (not one of Studio's calls: the app's client never sends it): each
+ * picture's items and where they are, and, with `shots`, screenshots of both canvases in this PC's temp folder.
+ */
+async function describe({ shots = false } = {}) {
+  const one = (it) => {
+    const i = it.item;
+    const g = (k) => {
+      try {
+        return i[k];
+      } catch {
+        return null;
+      }
+    };
+    return { layer: it.layer.id, source: it.layer.source, visible: g("visible"), position: g("position"), scale: g("scale"), crop: g("crop"), boundsType: g("boundsType"), bounds: g("bounds"), size: [it.input?.width, it.input?.height] };
+  };
+  const out = {
+    main: [...st.items.values()].map(one),
+    vertical: [...st.vitems.values()].map(one),
+    programs: [...st.progs].map(([id, p]) => ({ id, size: [p.scene.source?.width, p.scene.source?.height], items: [...p.items.values()].map(one) })),
+    nest: st.vnest ? one({ item: st.vnest, layer: { id: "vnest", source: "wl-vertical" }, input: st.vscene?.source }) : null,
+    canvases: [st.ctx?.canvasId ?? null, st.vctx?.canvasId ?? null],
+  };
+  if (shots) {
+    const dir = path.join(os.tmpdir(), "wl-describe");
+    mkdirSync(dir, { recursive: true });
+    out.shots = {};
+    for (const [name, ctx] of [["main", st.ctx], ["vertical", st.vctx]]) {
+      if (!ctx) continue;
+      try {
+        const r = await Promise.race([st.osn.NodeObs.OBS_content_takeScreenshot(ctx, dir, `${name}-%CCYY`), new Promise((_, no) => setTimeout(() => no(new Error("no screenshot in 15 s")), 15_000))]);
+        out.shots[name] = r?.path ?? null;
+      } catch (e) {
+        out.shots[name] = `failed: ${e?.message ?? e}`;
+      }
+    }
+  }
+  return out;
+}
+
 const HANDLERS = {
   init,
   shutdown,
@@ -825,6 +867,7 @@ const HANDLERS = {
   startStream: need(startStream),
   stopStream: need(stopStream),
   reconnectStream: need(reconnectStream),
+  describe: need(describe),
 };
 
 parent.on("message", async (e) => {
