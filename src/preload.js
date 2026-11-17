@@ -56,17 +56,20 @@ if (hello?.trusted) {
      *  null when this install doesn't have it; Studio then keeps its browser capture and encoder. */
     engine: hello.engine
       ? {
-          version: 2,
+          version: 3,
           start: () => engineCall("init"),
           devices: () => engineCall("devices"),
           setScene: (scene) => engineCall("setScene", scene),
+          /** The vertical picture's scene on the engine's second canvas (null takes it away). */
+          setVerticalScene: (scene) => engineCall("setVerticalScene", scene ?? { off: true }),
           setAudio: (map) => engineCall("setAudio", map),
           /** rect: the preview tile in CSS pixels of this page; show false hides the native preview. */
           preview: (rect, show = true) => engineCall("preview", { rect, show }),
           stream: {
+            /** cfg.canvas: "vertical" streams the vertical picture (its own output); the main one otherwise. */
             start: (cfg) => engineCall("startStream", cfg),
-            reconnect: (url) => engineCall("reconnectStream", { url }),
-            stop: () => engineCall("stopStream")
+            reconnect: (url, canvas) => engineCall("reconnectStream", { url, canvas }),
+            stop: (canvas) => engineCall("stopStream", { canvas })
           },
           /** Studio's overlays on the engine's stream (src/engine/overlayFeed.js): where the overlay page connects
            *  ({ port, key }), and the compositor's messages for it (pictures as ArrayBuffers). */
