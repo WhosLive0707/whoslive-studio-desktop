@@ -12,7 +12,9 @@ import { WebSocketServer } from "ws";
 import { OVERLAY_HTML } from "./overlayPage.js";
 
 /** Messages a page needs to catch up on, kept as the latest one of each. */
-const LATEST = new Set(["scene", "theme", "live", "watermark", "agent", "vtuber", "overlayData", "standDown", "soundLevels", "planes", "config"]);
+const LATEST = new Set(["scene", "vscene", "theme", "live", "watermark", "agent", "vtuber", "overlayData", "standDown", "soundLevels", "planes", "vplanes", "config"]);
+/** The 3D avatar's and effects' messages that only matter as they happen. */
+const AUX_PASS = new Set(["pose", "expression", "event", "stream"]);
 /** Messages that only matter as they happen. */
 const PASS = new Set(["alert", "agentLevel", "avatarPose"]);
 const MAX_CHAT = 60;
@@ -46,6 +48,7 @@ export class OverlayState {
     this.emotes = {};
     this.stickers = new Map(); // spot -> message
     this.banner = null; // { msg, until }
+    this.aux = new Map(); // "avatar3d" | "effects3d" -> { start, last: Map<type, msg> }
   }
 
   /** Takes one of Studio's messages; true when pages should get it. */
@@ -72,6 +75,14 @@ export class OverlayState {
       if (Array.isArray(m.arts) && m.arts.length) this.stickers.set(m.spot, m);
       else this.stickers.delete(m.spot);
     } else if (t === "banner") this.banner = m.text ? { msg: m, until: now + Math.max(2, Math.min(600, Number(m.seconds) || 0)) * 1000 } : null;
+    else if (t === "aux") {
+      // The 3D avatar and effects: how they started, and the latest of each setting (a pose only matters as it happens).
+      const kind = m.kind, type = m.msg?.type;
+      if ((kind !== "avatar3d" && kind !== "effects3d") || typeof type !== "string") return false;
+      if (type === "start") this.aux.set(kind, { start: m, last: new Map() });
+      else if (type === "stop") this.aux.delete(kind);
+      else if (!AUX_PASS.has(type)) this.aux.get(kind)?.last.set(type, m);
+    } else if (t === "rtc") return typeof m.to === "string";
     else if (!PASS.has(t)) return false;
     return true;
   }
@@ -89,17 +100,20 @@ export class OverlayState {
     for (const [channel, msgs] of this.chats) out.push({ type: "chatList", channel, msgs });
     for (const m of this.stickers.values()) out.push(m);
     if (this.banner && this.banner.until > now) out.push({ ...this.banner.msg, seconds: (this.banner.until - now) / 1000 });
-    for (const t of ["planes", "scene"]) {
+    for (const a of this.aux.values()) out.push(a.start, ...a.last.values());
+    for (const t of ["planes", "vplanes", "scene", "vscene"]) {
       const m = this.latest.get(t);
-      if (m) out.push(t === "scene" ? { ...m, fade: false } : m);
+      if (m) out.push(t === "scene" || t === "vscene" ? { ...m, fade: false } : m);
     }
     return out;
   }
 }
 
 export class OverlayFeed {
-  constructor({ log = () => void 0, fetchImpl = globalThis.fetch } = {}) {
+  constructor({ log = () => void 0, fetchImpl = globalThis.fetch, onPage = () => void 0 } = {}) {
     this.log = log;
+    /** A page's own messages for Studio: it's up ("hello", with which page it is), and its side of a connection. */
+    this.onPage = onPage;
     this.fetch = fetchImpl;
     this.origin = null;
     this.scripts = new Map();
@@ -119,7 +133,7 @@ export class OverlayFeed {
     if (this.ready) return this.ready;
     this.ready = new Promise((resolve, reject) => {
       const server = http.createServer((req, res) => void this.serve(req, res));
-      const wss = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024 });
+      const wss = new WebSocketServer({ noServer: true, maxPayload: 256 * 1024 });
       server.on("upgrade", (req, socket, head) => {
         let ok = false;
         try {
@@ -134,6 +148,20 @@ export class OverlayFeed {
           return;
         }
         wss.handleUpgrade(req, socket, head, (ws) => {
+          ws.on("message", (d, binary) => {
+            if (binary) return;
+            let m;
+            try {
+              m = JSON.parse(String(d));
+            } catch {
+              return;
+            }
+            const page = typeof m?.page === "string" ? m.page : typeof m?.from === "string" ? m.from : "";
+            if (!/^[mv]\d{1,2}$/.test(page)) return;
+            if (m.type === "hello") ws.page = page;
+            else if (m.type !== "rtc" || ws.page !== page) return;
+            this.onPage(m);
+          });
           for (const m of this.state.replay()) this.sendTo(ws, m);
         });
       });
@@ -161,7 +189,10 @@ export class OverlayFeed {
     }
     if (req.method !== "GET") return done(405, "text/plain", "");
     if (path === "/overlay.html") return done(200, "text/html; charset=utf-8", OVERLAY_HTML);
-    if (!SCRIPT_PATH.test(path) || !this.origin) return done(404, "text/plain", "");
+    if (!this.origin) return done(404, "text/plain", "");
+    // Anything else the pages load from Studio's site (the 3D avatar's models, the effects' textures), passed on as
+    // it is; Studio's scripts are kept once fetched.
+    if (!SCRIPT_PATH.test(path)) return this.pass(req, res, path.startsWith("/site/") ? path.slice(5) : path);
     try {
       let body = this.scripts.get(path);
       if (!body) {
@@ -175,6 +206,22 @@ export class OverlayFeed {
     } catch (e) {
       this.log("overlay", "error", `couldn't get ${path}: ${e?.message ?? e}`);
       return done(502, "text/plain", "");
+    }
+  }
+
+  async pass(req, res, path) {
+    try {
+      const u = new URL(req.url ?? "", "http://127.0.0.1");
+      if (!/^\/[\w./%-]*$/.test(path) || path.includes("..")) throw new Error("bad path");
+      const r = await this.fetch(`${this.origin}${path}${u.search}`);
+      const type = r.headers.get("content-type") ?? "application/octet-stream";
+      const body = Buffer.from(await r.arrayBuffer());
+      res.writeHead(r.ok ? 200 : r.status === 404 ? 404 : 502, { "Content-Type": type, "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff" });
+      res.end(r.ok ? body : "");
+    } catch (e) {
+      this.log("overlay", "error", `couldn't get ${path}: ${e?.message ?? e}`);
+      res.writeHead(502, { "Content-Type": "text/plain" });
+      res.end("");
     }
   }
 
@@ -193,11 +240,11 @@ export class OverlayFeed {
     ws.send(s);
   }
 
-  /** One of Studio's compositor messages. */
+  /** One of Studio's compositor messages (or its side of a connection to one page). */
   post(m) {
     if (!this.state.take(m)) return;
     if (!this.wss) return;
-    for (const ws of this.wss.clients) this.sendTo(ws, m);
+    for (const ws of this.wss.clients) if (m.type !== "rtc" || ws.page === m.to) this.sendTo(ws, m);
   }
 
   stop() {
