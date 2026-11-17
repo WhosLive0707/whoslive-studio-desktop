@@ -10,6 +10,7 @@ import { encoderInfo, encoderSettings, pickEncoder } from "./encoders.js";
 import { itemTransform, levelToFactor, sameTransform, smoothFactor } from "./layout.js";
 import { diffScene, emptyDiff, planScene } from "./scene.js";
 import { RelayLink } from "./relay.js";
+import { programItem, programLayer, programMap } from "./vertical.js";
 
 /* global require */
 // Only ever runs bundled (dist/engine-host.cjs, CommonJS); obs-studio-node is loaded from its own folder at run time.
@@ -39,14 +40,23 @@ const st = {
   transition: null,
   plan: null,
   inputs: new Map(), // studio id -> IInput
-  items: new Map(), // layer id -> { item, layer, last }
+  items: new Map(), // layer id -> { item, layer, last, input, prog }
+  // The vertical picture (TikTok, Instagram, Shorts): its own canvas, its layers in a private scene nested on it, and
+  // the main picture's copies its "@program" layers show (vertical.js).
+  vctx: null,
+  vplan: null,
+  vscene: null,
+  vnest: null,
+  vitems: new Map(),
+  progs: new Map(), // program source id -> { scene, blur, items }
+  outs: new Map(), // "main" | "vertical" -> { streaming, encoder, service, link, info, kbps, url, stopping }
+  audioTrack: null,
   filters: new Map(), // layer id -> opacity filter
   volmeters: new Map(), // studio id -> IVolmeter
   levels: new Map(), // studio id -> dB (magnitude)
   sizes: new Map(), // studio id -> { width, height }
   factors: new Map(), // layer id -> current Scale to sound factor
   display: null, // preview display name
-  out: null, // { streaming, encoder, service, audioTrack, link, info, kbps, url, stopping }
   failedEncoders: [],
   timers: [],
 };
@@ -98,18 +108,22 @@ function initError(code) {
 function shutdown() {
   for (const t of st.timers) clearInterval(t);
   st.timers = [];
-  try {
-    stopOutput(true);
-  } catch {
-    /* going down */
+  for (const out of [...st.outs.values()]) {
+    try {
+      stopOutput(true, out);
+    } catch {
+      /* going down */
+    }
   }
+  st.outs.clear();
   const osn = st.osn;
   if (!osn) return { ok: true };
   try {
     if (st.display) osn.NodeObs.OBS_content_destroyDisplay(st.display);
     for (const v of st.volmeters.values()) v.destroy();
+    dropVertical();
     for (const { item } of st.items.values()) item.remove();
-    for (const i of st.inputs.values()) i.release();
+    for (const [id, i] of st.inputs) if (!st.progs.has(id)) i.release();
     osn.Global.setOutputSource(0, null);
     st.transition?.release();
     st.scene?.release();
@@ -126,8 +140,12 @@ function shutdown() {
 
 /* ---------------- video ---------------- */
 
-function setCanvas({ width, height, fps }, outSize) {
-  st.ctx.video = {
+function setCanvas(c, outSize) {
+  setCanvasOf(st.ctx, c, outSize);
+}
+
+function setCanvasOf(ctx, { width, height, fps }, outSize) {
+  ctx.video = {
     fpsNum: fps,
     fpsDen: 1,
     baseWidth: width,
@@ -184,20 +202,33 @@ function devices() {
 
 /* ---------------- the scene ---------------- */
 
-function setScene(scene) {
+/* Layers live in collections: the main picture (the program scene, main canvas), the vertical picture (a private
+ * scene nested on the vertical canvas) and the main picture's copies for the vertical "@program" layers. Sources are
+ * shared: one OBS input per Studio source, whichever pictures show it. */
+const mainCol = () => ({ name: "main", scene: st.scene, video: st.ctx, items: st.items });
+const vCol = () => ({ name: "vertical", scene: st.vscene, video: st.vctx, items: st.vitems });
+const progCol = (p) => ({ name: "program", scene: p.scene, video: st.vctx, items: p.items });
+const allItems = () => [st.items, st.vitems, ...[...st.progs.values()].map((p) => p.items)];
+
+/** Every input the pictures need: the main scene's, then the vertical one's. */
+function wanted(main, vertical) {
+  const m = new Map(main?.inputs ?? []);
+  for (const [id, i] of vertical?.inputs ?? []) if (!m.has(id)) m.set(id, i);
+  return m;
+}
+
+const NO_CANVAS = { width: 1920, height: 1080, fps: 60 };
+
+/** Creates, recreates, updates and releases inputs to go from what was wanted to what is. */
+function syncInputs(before, after) {
   const osn = st.osn;
-  const next = planScene(scene);
-  const d = diffScene(st.plan, next);
-  if (emptyDiff(d) && sameOrder(d.order)) return { changed: false };
-  if (d.canvasChanged) {
-    // A live stream keeps the picture it started with (the platforms need one resolution).
-    if (st.out) next.canvas = st.plan?.canvas ?? next.canvas;
-    else setCanvas(next.canvas);
-  }
-  for (const id of d.removeLayers) removeLayer(id);
+  const d = diffScene({ canvas: NO_CANVAS, inputs: before, layers: [] }, { canvas: NO_CANVAS, inputs: after, layers: [] });
+  const recreated = new Set(d.recreateInputs.map((i) => i.id));
+  const gone = new Set([...d.removeInputs, ...recreated]);
+  // Layers on a source that goes (or comes back as another kind) go first, everywhere.
+  for (const items of allItems()) for (const [lid, it] of [...items]) if (gone.has(it.layer.source)) removeItemFrom(items, lid);
   for (const id of d.removeInputs) removeInput(id);
   for (const input of d.recreateInputs) {
-    for (const [lid, it] of st.items) if (it.layer.source === input.id) removeLayer(lid);
     removeInput(input.id);
     createInput(osn, input);
   }
@@ -206,23 +237,138 @@ function setScene(scene) {
     const i = st.inputs.get(u.id);
     if (!i) continue;
     if (Object.keys(u.settings).length) i.update(u.settings);
-    if (u.audio !== undefined && next.inputs.get(u.id)?.kind === "camera") i.muted = !u.audio;
+    if (u.audio !== undefined && after.get(u.id)?.kind === "camera") i.muted = !u.audio;
   }
-  for (const l of d.addLayers) addLayer(l);
-  for (const l of d.updateLayers) {
-    const it = st.items.get(l.id);
-    if (!it) continue;
-    it.layer = l;
-    applyTransform(it, true);
-    setOpacity(l);
+  return !emptyDiff({ ...d, canvasChanged: false });
+}
+
+/** A collection's layers as `layers` (bottom to top): items added, moved, removed. True when anything changed. */
+function syncLayers(col, layers) {
+  let changed = false;
+  const want = new Map(layers.map((l) => [l.id, l]));
+  for (const [id, it] of [...col.items]) {
+    const l = want.get(id);
+    if (!l || l.source !== it.layer.source || st.inputs.get(l.source) !== it.input) {
+      removeItemFrom(col.items, id, col.name === "main");
+      changed = true;
+    }
   }
+  for (const l of layers) {
+    const it = col.items.get(l.id);
+    if (!it) {
+      if (addItem(col, l)) changed = true;
+    } else if (JSON.stringify(it.layer) !== JSON.stringify(l)) {
+      it.layer = l;
+      applyTransform(it, true);
+      if (col.name === "main") setOpacity(l);
+      changed = true;
+    }
+  }
+  if (!sameOrder(col, layers.map((l) => l.id))) {
+    reorder(col, layers.map((l) => l.id));
+    changed = true;
+  }
+  return changed;
+}
+
+/** The main picture's copies for the vertical picture's "@program" layers, laid out where each shows. */
+function syncPrograms() {
+  let changed = false;
+  for (const [id, p] of st.progs) {
+    const box = st.vplan?.layers.find((l) => l.source === id) ?? null;
+    const map = box && st.plan ? programMap(box, st.plan.canvas) : null;
+    const layers = map ? st.plan.layers.map((l) => programLayer(l, map, p.blur)) : [];
+    if (syncLayers(progCol(p), layers)) changed = true;
+  }
+  return changed;
+}
+
+function setScene(scene) {
+  const next = planScene(scene);
+  const canvasChanged = !st.plan || st.plan.canvas.width !== next.canvas.width || st.plan.canvas.height !== next.canvas.height || st.plan.canvas.fps !== next.canvas.fps;
+  if (canvasChanged) {
+    // A live stream keeps the picture it started with (the platforms need one resolution).
+    if (st.outs.has("main")) next.canvas = st.plan?.canvas ?? next.canvas;
+    else setCanvas(next.canvas);
+  }
+  let changed = syncInputs(wanted(st.plan, st.vplan), wanted(next, st.vplan));
   st.plan = next;
-  reorder(d.order);
-  return { changed: true };
+  if (syncLayers(mainCol(), next.layers)) changed = true;
+  if (st.vplan) {
+    if (syncLayers(vCol(), st.vplan.layers)) changed = true;
+    if (syncPrograms()) changed = true;
+  }
+  return { changed: changed || canvasChanged };
+}
+
+/** The vertical picture's scene (null: none). Its canvas, the private scene nested on it, and the program copies. */
+function setVerticalScene(scene) {
+  const osn = st.osn;
+  if (!scene || scene.off) {
+    if (st.outs.has("vertical")) throw new Error("The vertical picture is live");
+    const before = wanted(st.plan, st.vplan);
+    dropVertical();
+    syncInputs(before, wanted(st.plan, null));
+    return { changed: true };
+  }
+  const next = planScene(scene);
+  if (!st.vctx) {
+    st.vctx = osn.VideoFactory.create();
+    setCanvasOf(st.vctx, next.canvas);
+    st.vscene = osn.SceneFactory.createPrivate("wl-vertical");
+    st.vnest = st.scene.add(st.vscene.source);
+    try {
+      st.vnest.video = st.vctx;
+    } catch {
+      /* single-canvas builds have no vertical picture */
+    }
+  } else if (!st.outs.has("vertical") && (st.vplan?.canvas.width !== next.canvas.width || st.vplan?.canvas.height !== next.canvas.height || st.vplan?.canvas.fps !== next.canvas.fps)) {
+    setCanvasOf(st.vctx, next.canvas);
+  } else if (st.outs.has("vertical")) next.canvas = st.vplan?.canvas ?? next.canvas;
+  let changed = syncInputs(wanted(st.plan, st.vplan), wanted(st.plan, next));
+  st.vplan = next;
+  if (syncLayers(vCol(), next.layers)) changed = true;
+  if (syncPrograms()) changed = true;
+  return { changed };
+}
+
+/** The vertical picture goes: its items, its program copies, its nested scene and canvas. */
+function dropVertical() {
+  for (const [lid] of [...st.vitems]) removeItemFrom(st.vitems, lid);
+  for (const p of st.progs.values()) for (const [lid] of [...p.items]) removeItemFrom(p.items, lid);
+  try {
+    st.vnest?.remove();
+  } catch {
+    /* gone */
+  }
+  try {
+    st.vscene?.release();
+  } catch {
+    /* gone */
+  }
+  try {
+    st.vctx?.destroy();
+  } catch {
+    /* gone */
+  }
+  st.vnest = st.vscene = st.vctx = st.vplan = null;
 }
 
 function createInput(osn, input) {
   try {
+    if (input.kind === "program" || input.kind === "program-blur") {
+      // The main picture's copy for the vertical picture: a private scene the vertical layer shows (vertical.js).
+      const scene = osn.SceneFactory.createPrivate(obsName(input.id));
+      const blur = input.kind === "program-blur";
+      if (blur) {
+        // Studio's soft backdrop is dimmed: 65% of the picture.
+        const f = osn.FilterFactory.create("color_filter_v2", obsName(`${input.id}-dim`), { color_multiply: 0xffa6a6a6 });
+        scene.source.addFilter(f);
+      }
+      st.progs.set(input.id, { scene, blur, items: new Map() });
+      st.inputs.set(input.id, scene.source);
+      return;
+    }
     const i = osn.InputFactory.create(input.obsId, obsName(input.id), input.settings);
     if (input.kind === "camera") i.muted = !input.audio;
     st.inputs.set(input.id, i);
@@ -242,6 +388,18 @@ function removeInput(id) {
   st.volmeters.delete(id);
   st.levels.delete(id);
   st.sizes.delete(id);
+  const p = st.progs.get(id);
+  if (p) {
+    for (const [lid] of [...p.items]) removeItemFrom(p.items, lid);
+    st.progs.delete(id);
+    st.inputs.delete(id);
+    try {
+      p.scene.release();
+    } catch {
+      /* gone */
+    }
+    return;
+  }
   try {
     st.inputs.get(id)?.release();
   } catch {
@@ -250,47 +408,51 @@ function removeInput(id) {
   st.inputs.delete(id);
 }
 
-function addLayer(layer) {
+function addItem(col, layer) {
   const input = st.inputs.get(layer.source);
-  if (!input) return;
-  const item = st.scene.add(input);
+  if (!input || !col.scene) return false;
+  const item = col.scene.add(input);
   try {
-    item.video = st.ctx;
+    item.video = col.video;
   } catch {
     /* a single-canvas build of obs-studio-node renders every item on its one canvas */
   }
-  const it = { item, layer, last: null };
-  st.items.set(layer.id, it);
+  const it = { item, layer, last: null, input, prog: col.name === "vertical" ? (st.progs.get(layer.source) ?? null) : null };
+  col.items.set(layer.id, it);
   applyTransform(it, true);
-  setOpacity(layer);
+  if (col.name === "main") setOpacity(layer);
+  return true;
 }
 
-function removeLayer(id) {
-  const it = st.items.get(id);
+function removeItemFrom(items, id, main = items === st.items) {
+  const it = items.get(id);
   if (!it) return;
   try {
     it.item.remove();
   } catch {
     /* already gone */
   }
-  st.items.delete(id);
-  st.filters.delete(id);
-  st.factors.delete(id);
+  items.delete(id);
+  if (main) {
+    st.filters.delete(id);
+    st.factors.delete(id);
+  }
 }
 
-function sameOrder(order) {
-  const items = st.scene?.getItems?.() ?? [];
-  const now = items.map((i) => [...st.items].find(([, it]) => it.item.id === i.id)?.[0]).filter(Boolean);
+function sameOrder(col, order) {
+  const items = col.scene?.getItems?.() ?? [];
+  const now = items.map((i) => [...col.items].find(([, it]) => it.item.id === i.id)?.[0]).filter(Boolean);
   return now.length === order.length && now.every((id, n) => id === order[n]);
 }
 
-/** Bottom to top, as Studio lists its layers. */
-function reorder(order) {
-  if (sameOrder(order)) return;
+/** Bottom to top, as Studio lists its layers. Items in the program scene that aren't a collection's stay below. */
+function reorder(col, order) {
+  if (sameOrder(col, order)) return;
+  const others = (col.scene?.getItems?.() ?? []).filter((i) => ![...col.items.values()].some((it) => it.item.id === i.id)).length;
   order.forEach((id, n) => {
-    const it = st.items.get(id);
+    const it = col.items.get(id);
     try {
-      it?.item.move(n);
+      it?.item.move(others + n);
     } catch {
       /* removed meanwhile */
     }
@@ -298,6 +460,7 @@ function reorder(order) {
 }
 
 function applyTransform(it, force = false) {
+  if (it.prog) return placeProgram(it, force);
   const size = st.sizes.get(it.layer.source);
   const factor = it.layer.sound ? (st.factors.get(it.layer.id) ?? 1) : 1;
   const t = itemTransform(it.layer, size, factor);
@@ -312,6 +475,25 @@ function applyTransform(it, force = false) {
     item.cropToBounds = t.cropToBounds;
     item.scale = t.scale;
     item.position = t.position;
+    item.crop = t.crop;
+    item.visible = t.visible;
+  } finally {
+    item.deferUpdateEnd();
+  }
+  it.last = t;
+}
+
+/** A vertical "@program" layer: the main picture's copy at the layer's box, cropped to it (vertical.js). */
+function placeProgram(it, force) {
+  const t = programItem(it.layer, st.vplan?.canvas ?? { width: 1080, height: 1920 }, it.prog.blur);
+  if (!force && JSON.stringify(it.last) === JSON.stringify(t)) return;
+  const item = it.item;
+  item.deferUpdateBegin();
+  try {
+    item.alignment = 5; // top left
+    item.boundsType = 0;
+    item.position = t.position;
+    item.scale = t.scale;
     item.crop = t.crop;
     item.visible = t.visible;
   } finally {
@@ -348,7 +530,7 @@ function sizeTick() {
       const old = st.sizes.get(id);
       if (w > 0 && h > 0 && (!old || old.width !== w || old.height !== h)) {
         st.sizes.set(id, { width: w, height: h });
-        for (const it of st.items.values()) if (it.layer.source === id) applyTransform(it);
+        for (const items of allItems()) for (const it of items.values()) if (it.layer.source === id) applyTransform(it);
       }
     } catch {
       /* source gone */
@@ -383,6 +565,8 @@ function soundTick() {
     st.factors.set(it.layer.id, smoothFactor(cur, levelToFactor(db, s), dt, s));
     applyTransform(it);
   }
+  // The vertical picture's layers and the main picture's copies scale with the same factor (by layer id).
+  for (const items of allItems().slice(1)) for (const it of items.values()) if (it.layer.sound) applyTransform(it);
   // Mixer meters in Studio: 20 times a second is smooth enough.
   if (now - lastLevelsSent >= 50 && st.levels.size) {
     lastLevelsSent = now;
@@ -437,49 +621,61 @@ function preview({ hwnd, rect, show }) {
 
 /* ---------------- streaming ---------------- */
 
-async function startStream({ url, kbps, audioKbps = 160, prefer, width, height, reconnect = false }) {
-  if (st.out && !reconnect) throw new Error("Already live");
+/** "main" (default) or "vertical": which picture a stream call is about. */
+const canvasOf = (c) => (c === "vertical" ? "vertical" : "main");
+/** Events about a picture's stream say which (Studio's uploads listen for their own). */
+const emitFor = (canvas, event, data) => emit(event, { ...data, canvas });
+
+async function startStream({ url, kbps, audioKbps = 160, prefer, width, height, reconnect = false, canvas: which }) {
+  const canvas = canvasOf(which);
+  if (st.outs.has(canvas) && !reconnect) throw new Error("Already live");
+  if (canvas === "vertical" && !st.vctx) throw new Error("The vertical picture isn't set up");
   const osn = st.osn;
   const enc = pickEncoder(osn.VideoEncoderFactory.types(), { prefer, failed: st.failedEncoders });
   if (!enc) throw new Error("No video encoder is available on this PC.");
-  const canvas = st.plan?.canvas ?? { width: 1920, height: 1080, fps: 60 };
+  const plan = canvas === "vertical" ? st.vplan : st.plan;
+  const ctx = canvas === "vertical" ? st.vctx : st.ctx;
+  const cv = plan?.canvas ?? (canvas === "vertical" ? { width: 1080, height: 1920, fps: 30 } : NO_CANVAS);
   // The stream's own size (a 1440p canvas can stream 1080p); OBS scales it on the GPU.
-  if (width && height && (width !== canvas.width || height !== canvas.height)) setCanvas(canvas, { width, height });
+  if (width && height && (width !== cv.width || height !== cv.height)) setCanvasOf(ctx, cv, { width, height });
   const link = new RelayLink({ ffmpeg: path.join(st.dir, "ffmpeg.exe"), url, kbps, log });
-  const out = { link, info: encoderInfo(enc.id), kbps, url, stopping: false, streaming: null, encoder: null, service: null, audioTrack: null, startedAt: Date.now() };
-  st.out = out;
-  link.on("relay", (msg) => emit("relay", msg));
+  const out = { canvas, link, info: encoderInfo(enc.id), kbps, url, stopping: false, streaming: null, encoder: null, service: null, startedAt: Date.now() };
+  st.outs.set(canvas, out);
+  link.on("relay", (msg) => emitFor(canvas, "relay", msg));
   link.on("stats", (s) => (out.linkStats = s));
   link.on("closed", (info) => {
     stopOutput(false, out);
-    if (st.out === out) {
-      st.out = null;
-      // Back to the canvas's own size for the preview (a stream may have been scaled down).
-      if (st.plan) setCanvas(st.plan.canvas);
+    if (st.outs.get(canvas) === out) {
+      st.outs.delete(canvas);
+      // Back to the canvas's own size (a stream may have been scaled down).
+      if (plan) setCanvasOf(ctx, plan.canvas);
     }
-    emit("closed", info);
+    emitFor(canvas, "closed", info);
   });
   link.on("open", () => {
     try {
       out.streaming.start();
-      emit("open", { encoder: out.info });
+      emitFor(canvas, "open", { encoder: out.info });
     } catch (e) {
       log("output", "error", e?.message ?? e);
       link.shut(4500, "The engine couldn't start the stream");
     }
   });
   try {
-    out.encoder = osn.VideoEncoderFactory.create(enc.id, "wl-video", encoderSettings(enc.id, { kbps }));
+    out.encoder = osn.VideoEncoderFactory.create(enc.id, canvas === "vertical" ? "wl-video-vertical" : "wl-video", encoderSettings(enc.id, { kbps }));
     if (out.encoder.lastError) throw new Error(out.encoder.lastError);
-    out.audioTrack = osn.AudioTrackFactory.create(Math.max(64, Math.min(320, audioKbps)), "wl-stream");
-    osn.AudioTrackFactory.setAtIndex(out.audioTrack, 1);
+    // One sound for both pictures: the engine mixes once.
+    if (!st.audioTrack) {
+      st.audioTrack = osn.AudioTrackFactory.create(Math.max(64, Math.min(320, audioKbps)), "wl-stream");
+      osn.AudioTrackFactory.setAtIndex(st.audioTrack, 1);
+    }
     const s = osn.AdvancedStreamingFactory.create();
-    s.video = st.ctx;
+    s.video = ctx;
     s.videoEncoder = out.encoder;
     s.audioTrack = 1;
     s.enforceServiceBitrate = false;
     s.enableTwitchVOD = false;
-    out.service = osn.ServiceFactory.create("rtmp_custom", "wl-local", { server: "rtmp://127.0.0.1:1/live", key: "x", use_auth: false, bwtest: false });
+    out.service = osn.ServiceFactory.create("rtmp_custom", canvas === "vertical" ? "wl-local-vertical" : "wl-local", { server: "rtmp://127.0.0.1:1/live", key: "x", use_auth: false, bwtest: false });
     s.service = out.service;
     const delay = osn.DelayFactory.create();
     delay.enabled = false;
@@ -500,34 +696,34 @@ async function startStream({ url, kbps, audioKbps = 160, prefer, width, height, 
     out.streaming = s;
     // The local listener first, so OBS has somewhere to publish; then the relay. OBS starts on the relay's "open".
     await link.prepare();
-    if (st.out !== out || out.stopping || !out.service) throw new Error("The stream was stopped while starting");
+    if (st.outs.get(canvas) !== out || out.stopping || !out.service) throw new Error("The stream was stopped while starting");
     out.service.update({ server: link.rtmp.server, key: link.rtmp.key, use_auth: false, bwtest: false });
-    emit("format", { encoder: out.info, kbps, width: width ?? canvas.width, height: height ?? canvas.height, fps: canvas.fps });
+    emitFor(canvas, "format", { encoder: out.info, kbps, width: width ?? cv.width, height: height ?? cv.height, fps: cv.fps });
     link.connect();
     return { encoder: out.info };
   } catch (e) {
     link.shut(4500, "The engine couldn't start the stream");
     stopOutput(true, out);
-    if (st.out === out) st.out = null;
+    if (st.outs.get(canvas) === out) st.outs.delete(canvas);
     throw e;
   }
 }
 
 function onSignal(out, sig) {
-  emit("output", { signal: sig?.signal, code: sig?.code, error: sig?.error ? String(sig.error).slice(0, 300) : "" });
+  emitFor(out.canvas, "output", { signal: sig?.signal, code: sig?.code, error: sig?.error ? String(sig.error).slice(0, 300) : "" });
   if (sig?.signal !== "stop" || out.stopping) return;
   if (sig.code === -8 || sig.code === -65) {
     // The encoder failed (a busy or outdated GPU encoder): the next start uses the next one, like OBS falls back.
     if (!st.failedEncoders.includes(out.info.id)) st.failedEncoders.push(out.info.id);
     log("encoder", "error", `${out.info.id} failed (${sig.code}) ${sig.error ?? ""}`);
-    emit("encoder-failed", { encoder: out.info, outdatedDriver: sig.code === -65 });
+    emitFor(out.canvas, "encoder-failed", { encoder: out.info, outdatedDriver: sig.code === -65 });
   }
   // OBS gave up on the local publish: close the relay link so Studio reconnects with a fresh token (as it does for
   // the browser encoder); the relay holds the platforms meanwhile.
   out.link.shut(4500, "Engine output stopped");
 }
 
-function stopOutput(force, out = st.out) {
+function stopOutput(force, out) {
   if (!out) return;
   out.stopping = true;
   try {
@@ -554,41 +750,44 @@ function stopOutput(force, out = st.out) {
   out.streaming = out.service = out.encoder = null;
 }
 
-function stopStream() {
-  const out = st.out;
+function stopStream({ canvas } = {}) {
+  const out = st.outs.get(canvasOf(canvas));
   if (!out) return { ok: true };
   out.link.end(); // the relay ends each platform cleanly; "closed" follows and stops the output
   return { ok: true };
 }
 
-async function reconnectStream({ url }) {
-  const prev = st.out;
-  const opts = prev ? { kbps: prev.kbps, prefer: undefined } : { kbps: 6000 };
+async function reconnectStream({ url, canvas: which }) {
+  const canvas = canvasOf(which);
+  const prev = st.outs.get(canvas);
+  const kbps = prev ? prev.kbps : 6000;
   if (prev) {
     prev.link.removeAllListeners("closed");
     prev.link.shut(4000, "reconnecting");
     stopOutput(false, prev);
-    st.out = null;
+    st.outs.delete(canvas);
   }
-  return startStream({ url, kbps: opts.kbps, reconnect: true });
+  return startStream({ url, kbps, reconnect: true, canvas });
 }
 
 /* ---------------- stats ---------------- */
 
 function statsTick() {
-  const osn = st.osn, out = st.out;
+  const osn = st.osn;
   if (!osn) return;
   try {
-    emit("stats", {
+    const common = {
       cpu: Math.round(osn.Global.cpuPercentage * 10) / 10,
       fps: Math.round(osn.Global.currentFrameRate * 10) / 10,
       renderMs: Math.round(osn.Global.averageFrameRenderTime * 100) / 100,
       laggedFrames: osn.Global.laggedFrames,
-      skippedFrames: st.ctx?.skippedFrames ?? 0,
-      encodedFrames: st.ctx?.encodedFrames ?? 0,
-      ...(out?.streaming
+    };
+    const live = (out, ctx) =>
+      out?.streaming
         ? {
             live: true,
+            skippedFrames: ctx?.skippedFrames ?? 0,
+            encodedFrames: ctx?.encodedFrames ?? 0,
             encoder: out.info,
             droppedFrames: out.streaming.droppedFrames,
             totalFrames: out.streaming.totalFrames,
@@ -599,8 +798,10 @@ function statsTick() {
             congested: !!out.linkStats?.paused,
             secs: Math.round((Date.now() - out.startedAt) / 1000),
           }
-        : { live: false }),
-    });
+        : { live: false, skippedFrames: ctx?.skippedFrames ?? 0, encodedFrames: ctx?.encodedFrames ?? 0 };
+    emit("stats", { ...common, ...live(st.outs.get("main"), st.ctx) });
+    const v = st.outs.get("vertical");
+    if (v) emitFor("vertical", "stats", { ...common, ...live(v, st.vctx) });
   } catch {
     /* engine going down */
   }
@@ -618,6 +819,7 @@ const HANDLERS = {
   shutdown,
   devices: need(devices),
   setScene: need(setScene),
+  setVerticalScene: need(setVerticalScene),
   setAudio: need(setAudio),
   preview: need(preview),
   startStream: need(startStream),
