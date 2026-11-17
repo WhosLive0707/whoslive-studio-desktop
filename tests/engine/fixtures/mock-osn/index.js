@@ -61,7 +61,7 @@ class Item {
   }
   remove() {
     this.scene.items = this.scene.items.filter((i) => i !== this);
-    log.push(["remove-item", this.source.name]);
+    log.push(["remove-item", this.source.name, this.scene.name]);
   }
   move(n) {
     const a = this.scene.items.filter((i) => i !== this);
@@ -71,13 +71,18 @@ class Item {
 }
 
 class Scene {
-  constructor(name) {
+  constructor(name, priv = false) {
     this.name = name;
     this.items = [];
+    this.private = priv;
+    // A scene as a source (nested in another scene): drawn at the size of the canvas it's on.
+    this.source = { id: "scene", name, width: 1080, height: 1920, outputFlags: 0, filters: [], addFilter(f) { this.filters.push(f); }, removeFilter() {}, release() {} };
+    log.push(["scene", name, priv]);
   }
   add(input) {
     const it = new Item(input, this);
     this.items.push(it);
+    log.push(["add-item", input.name, this.name]);
     return it;
   }
   getItems() {
@@ -129,8 +134,8 @@ module.exports = {
     OBS_content_resizeDisplay: (n, w, h) => log.push(["resize", n, w, h]),
     OBS_content_destroyDisplay() {},
   },
-  VideoFactory: { create: () => ({ video: null, skippedFrames: 0, encodedFrames: 0, destroy() {} }) },
-  SceneFactory: { create: (n) => new Scene(n) },
+  VideoFactory: { create: () => ({ video: null, skippedFrames: 0, encodedFrames: 0, destroy() { log.push(["video-destroy"]); } }) },
+  SceneFactory: { create: (n) => new Scene(n), createPrivate: (n) => new Scene(n, true) },
   TransitionFactory: { create: () => ({ set() {}, release() {} }) },
   Global: { setOutputSource() {}, cpuPercentage: 3.2, currentFrameRate: 60, averageFrameRenderTime: 1.1, laggedFrames: 0 },
   InputFactory: { create: (id, name, s) => new Input(id, name, s) },
