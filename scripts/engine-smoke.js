@@ -119,6 +119,52 @@ app.whenReady().then(async () => {
     step(`overlay pixels: top-left ${at(48, 27)}, top-right ${at(144, 27)}`);
     if (!near(at(48, 27), [255, 0, 255])) return fail("the overlay page isn't in the picture");
     if (!near(at(144, 27), [0x18, 0xc2, 0xb4])) return fail("the overlay page isn't see-through");
+
+    // The vertical picture on the engine's second canvas: the main picture (with its overlay) in the middle box,
+    // the main picture blurred and dimmed behind it, streamed to its own relay link.
+    await client.call("setVerticalScene", {
+      canvas: { width: 1080, height: 1920, fps: 30 },
+      sources: [{ id: "wl-program-blur", kind: "program-blur" }, { id: "wl-program", kind: "program" }],
+      layers: [
+        { id: "V-bg", source: "wl-program-blur", x: 0, y: 0, w: 1080, h: 1920, fit: "cover" },
+        { id: "V-main", source: "wl-program", x: 0, y: 656, w: 1080, h: 608, fit: "contain" },
+      ],
+    });
+    const vgot = { bytes: 0, chunks: [], ended: false };
+    const vss = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+    await new Promise((r) => vss.on("listening", r));
+    vss.on("connection", (ws) => {
+      ws.send(JSON.stringify({ type: "ready", sid: "smoke-v", dests: ["Local"], dry: false }));
+      ws.on("message", (d, bin) => {
+        if (!bin) {
+          if (JSON.parse(String(d)).type === "end") vgot.ended = true;
+          return;
+        }
+        vgot.bytes += d.length;
+        vgot.chunks.push(Buffer.from(d));
+      });
+    });
+    await client.call("startStream", { url: `ws://127.0.0.1:${vss.address().port}/ingest?t=smoke-v`, kbps: 3000, prefer: "obs_x264", canvas: "vertical" });
+    await new Promise((r) => setTimeout(r, 6000));
+    await client.call("stopStream", { canvas: "vertical" });
+    for (let i = 0; i < 50 && !events.some((e) => e.event === "closed" && e.data?.canvas === "vertical"); i++) await new Promise((r) => setTimeout(r, 100));
+    if (!vgot.ended || vgot.bytes < 200_000) return fail(`vertical: relay got ${vgot.bytes} bytes, ended ${vgot.ended}`);
+    const vfile = path.join(app.getPath("temp"), "whoslive-smoke-vertical.mkv");
+    writeFileSync(vfile, Buffer.concat(vgot.chunks));
+    const vprobe = JSON.parse(execFileSync(path.join(engineDir(), "ffprobe.exe"), ["-v", "error", "-show_streams", "-of", "json", vfile]).toString());
+    const vv = vprobe.streams.find((s) => s.codec_type === "video");
+    step(`vertical probe: video ${vv?.codec_name} ${vv?.width}x${vv?.height}`);
+    if (vv?.codec_name !== "h264" || vv.width !== 1080 || vv.height !== 1920) return fail("vertical video isn't 1080x1920 H.264");
+    const vpx = execFileSync(path.join(engineDir(), "ffmpeg.exe"), ["-v", "error", "-sseof", "-1.5", "-i", vfile, "-frames:v", "1", "-vf", "scale=108:192", "-f", "rawvideo", "-pix_fmt", "rgb24", "-"]);
+    const vat = (x, y) => [...vpx.subarray((y * 108 + x) * 3, (y * 108 + x) * 3 + 3)];
+    // In the box (y 656..1264): the overlay's magenta top-left quarter, the scene's teal top-right.
+    step(`vertical pixels: box top-left ${vat(20, 70)}, box right ${vat(90, 70)}, backdrop ${vat(54, 20)}`);
+    if (!near(vat(20, 70), [255, 0, 255])) return fail("the vertical picture doesn't show the main picture's overlay");
+    if (!near(vat(90, 70), [0x18, 0xc2, 0xb4])) return fail("the vertical picture doesn't show the main picture");
+    const bg = vat(54, 20);
+    if (bg[0] + bg[1] + bg[2] < 60) return fail("the vertical picture's backdrop is empty");
+    await client.call("setVerticalScene", { off: true });
+    vss.close();
     feed.stop();
     site.close();
     client.stop();
