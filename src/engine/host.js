@@ -367,7 +367,11 @@ function createInput(osn, input) {
         const f = osn.FilterFactory.create("color_filter_v2", obsName(`${input.id}-dim`), { color_multiply: 0xffa6a6a6 });
         scene.source.addFilter(f);
       }
-      st.progs.set(input.id, { scene, blur, items: new Map() });
+      // Clipped to its box by a crop filter, by width and height: an item's crop goes by the size OBS gives a nested
+      // scene, which on the vertical canvas isn't the copy's own (the smoke test showed the box cropped away).
+      const clip = osn.FilterFactory.create("crop_filter", obsName(`${input.id}-clip`), { relative: false, left: 0, top: 0, cx: 1080, cy: 1920 });
+      scene.source.addFilter(clip);
+      st.progs.set(input.id, { scene, blur, clip, items: new Map() });
       st.inputs.set(input.id, scene.source);
       return;
     }
@@ -485,10 +489,18 @@ function applyTransform(it, force = false) {
   it.last = t;
 }
 
-/** A vertical "@program" layer: the main picture's copy at the layer's box, cropped to it (vertical.js). */
+/** A vertical "@program" layer: the main picture's copy at the layer's box, clipped to it (vertical.js). */
 function placeProgram(it, force) {
-  const t = programItem(it.layer, st.vplan?.canvas ?? { width: 1080, height: 1920 }, it.prog.blur);
+  const canvas = st.vplan?.canvas ?? { width: 1080, height: 1920 };
+  const t = programItem(it.layer, canvas, it.prog.blur);
   if (!force && JSON.stringify(it.last) === JSON.stringify(t)) return;
+  // The copy's part that shows: from its corner, the box's size (drawn smaller for the backdrop).
+  const clip = { relative: false, left: 0, top: 0, cx: Math.max(1, canvas.width - t.crop.right), cy: Math.max(1, canvas.height - t.crop.bottom) };
+  try {
+    it.prog.clip?.update(clip);
+  } catch (e) {
+    log("vertical", "warn", `clip: ${e?.message ?? e}`);
+  }
   const item = it.item;
   item.deferUpdateBegin();
   try {
@@ -496,7 +508,7 @@ function placeProgram(it, force) {
     item.boundsType = 0;
     item.position = t.position;
     item.scale = t.scale;
-    item.crop = t.crop;
+    item.crop = { left: 0, top: 0, right: 0, bottom: 0 };
     item.visible = t.visible;
   } finally {
     item.deferUpdateEnd();
