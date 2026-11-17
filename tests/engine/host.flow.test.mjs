@@ -217,10 +217,13 @@ test("the vertical picture: its own canvas and layers, the main picture's copies
   assert.deepEqual(copied, ["wl-game", "wl-cam", "wl-cam"]);
   const camInCopy = log.filter((e) => e[0] === "transform" && e[1] === "wl-cam" && Math.abs(e[2].bounds.x - 400 * 0.5625) < 0.01);
   assert.ok(camInCopy.length >= 1);
-  // The program items sit at their boxes, cropped to them; the backdrop is scaled back up.
+  // The program items sit at their boxes, clipped to them by a crop filter (not the item's crop); the backdrop is
+  // scaled back up.
   const prog = log.filter((e) => e[0] === "transform" && e[1] === "wl-wl-program").at(-1)[2];
   assert.deepEqual(prog.position, { x: 0, y: 656 });
-  assert.equal(prog.crop.bottom, 1920 - 608);
+  assert.equal(prog.crop.bottom, 0);
+  const clip = log.filter((e) => e[0] === "filter" && e[1] === "wl-wl-program-clip").at(-1)[2];
+  assert.deepEqual([clip.relative, clip.cx, clip.cy], [false, 1080, 608]);
   const blur = log.filter((e) => e[0] === "transform" && e[1] === "wl-wl-program-blur").at(-1)[2];
   assert.equal(blur.scale.x, 16);
 
