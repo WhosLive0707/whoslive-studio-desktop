@@ -42,7 +42,12 @@ let engine = null;
 const useEngine = () => engine ??= new EngineClient({ version: app.getVersion(), log: (stage, level, msg) => { if (level === "error") console.error(`[engine] ${stage}: ${msg}`); } });
 /** Studio's overlays for the engine's stream (overlayFeed.js): started on Studio's first call. */
 let overlayFeed = null;
-const useOverlayFeed = () => overlayFeed ??= new OverlayFeed({ log: (stage, level, msg) => { if (level === "error") console.error(`[engine] ${stage}: ${msg}`); } });
+/** The Studio page the overlay pages answer (its side of their video connections). */
+let overlayStudio = null;
+const useOverlayFeed = () => overlayFeed ??= new OverlayFeed({
+  log: (stage, level, msg) => { if (level === "error") console.error(`[engine] ${stage}: ${msg}`); },
+  onPage: (m) => { if (overlayStudio && !overlayStudio.isDestroyed()) overlayStudio.send("engine:event", "overlay", m); }
+});
 let pendingAudio = null;
 /** The next screen share's picker is for this capture of Studio's: what's picked is remembered (capture.next). */
 let pendingCapture = null;
@@ -156,7 +161,7 @@ function setUpBridge() {
   // Studio's overlays (chat, text, alerts, images...) for the engine's stream: where the overlay page connects, and
   // Studio's compositor messages for it. Trusted Studio page only.
   ipcMain.handle("engine:overlayEndpoint", (e) => {
-    sender(e);
+    overlayStudio = sender(e);
     if (!engineAvailable()) throw new Error("The engine isn't part of this install");
     return useOverlayFeed().start(originOf(e.senderFrame?.url));
   });
