@@ -130,6 +130,15 @@ app.whenReady().then(async () => {
         { id: "V-main", source: "wl-program", x: 0, y: 656, w: 1080, h: 608, fit: "contain" },
       ],
     });
+    // What the engine built for it, and what its canvas draws before any stream (for when the stream's pixels are off).
+    await new Promise((r) => setTimeout(r, 2000));
+    const built = await client.post("describe", { shots: true });
+    step(`vertical built: ${JSON.stringify(built)}`);
+    if (typeof built.shots?.vertical === "string" && !built.shots.vertical.startsWith("failed")) {
+      const spx = execFileSync(path.join(engineDir(), "ffmpeg.exe"), ["-v", "error", "-i", built.shots.vertical, "-vf", "scale=108:192", "-f", "rawvideo", "-pix_fmt", "rgb24", "-"]);
+      const sat = (x, y) => [...spx.subarray((y * 108 + x) * 3, (y * 108 + x) * 3 + 3)];
+      step(`vertical canvas (screenshot): box top-left ${sat(20, 70)}, box right ${sat(90, 70)}, backdrop ${sat(54, 20)}`);
+    }
     const vgot = { bytes: 0, chunks: [], ended: false };
     const vss = new WebSocketServer({ host: "127.0.0.1", port: 0 });
     await new Promise((r) => vss.on("listening", r));
