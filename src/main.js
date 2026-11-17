@@ -6,6 +6,7 @@ import { BrowserSources } from "./browserSources.js";
 import { captureKeyOk, findAgain, rememberPick } from "./captureMemory.js";
 import { CHANNEL } from "./channel.js";
 import { EngineClient, engineAvailable } from "./engine/client.js";
+import { OverlayFeed } from "./engine/overlayFeed.js";
 import { AUTOPLAY_FREE, UA_FALLBACK } from "./names.js";
 import { ObsReader } from "./obs.js";
 import { kindOf, pickCaptureSource } from "./picker.js";
@@ -39,6 +40,9 @@ const obs = new ObsReader();
 /** OBS's engine (libobs) for capture, encoding and streaming in the downloadable app: started on Studio's first call. */
 let engine = null;
 const useEngine = () => engine ??= new EngineClient({ version: app.getVersion(), log: (stage, level, msg) => { if (level === "error") console.error(`[engine] ${stage}: ${msg}`); } });
+/** Studio's overlays for the engine's stream (overlayFeed.js): started on Studio's first call. */
+let overlayFeed = null;
+const useOverlayFeed = () => overlayFeed ??= new OverlayFeed({ log: (stage, level, msg) => { if (level === "error") console.error(`[engine] ${stage}: ${msg}`); } });
 let pendingAudio = null;
 /** The next screen share's picker is for this capture of Studio's: what's picked is remembered (capture.next). */
 let pendingCapture = null;
@@ -148,6 +152,17 @@ function setUpBridge() {
     const client = useEngine();
     client.setOwner(owner);
     return client.call(String(type), type === "preview" ? client.previewArgs(owner, args ?? {}) : args ?? {});
+  });
+  // Studio's overlays (chat, text, alerts, images...) for the engine's stream: where the overlay page connects, and
+  // Studio's compositor messages for it. Trusted Studio page only.
+  ipcMain.handle("engine:overlayEndpoint", (e) => {
+    sender(e);
+    if (!engineAvailable()) throw new Error("The engine isn't part of this install");
+    return useOverlayFeed().start(originOf(e.senderFrame?.url));
+  });
+  ipcMain.on("engine:overlay", (e, msg) => {
+    if (!overlayFeed || !isTrusted(e.senderFrame?.url)) return;
+    overlayFeed.post(msg);
   });
   ipcMain.handle("bs:update", (e, id, o) => {
     const owner = sender(e);
@@ -457,6 +472,7 @@ app.whenReady().then(() => {
 app.on("will-quit", () => {
   globalShortcut.unregisterAll();
   engine?.stop();
+  overlayFeed?.stop();
 });
 app.on("window-all-closed", () => {
   if (updates?.restarting) return updates.install();
