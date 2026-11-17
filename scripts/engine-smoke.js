@@ -1,14 +1,30 @@
 // Smoke test of the real engine on Windows (CI: .github/workflows/native-engine.yml). Runs in Electron like the app:
 // starts OBS's engine through the same client Studio's calls go through, builds a scene, shows the preview in a
 // window, streams with x264 (CI machines have no GPU encoder) to a stand-in relay on this machine for 8 seconds,
-// ends it the way Studio does, and checks with ffprobe that the relay got real H.264 + AAC in Matroska.
+// ends it the way Studio does, and checks with ffprobe that the relay got real H.264 + AAC in Matroska. Studio's
+// overlays: a see-through overlay page (overlayFeed.js, with a stand-in for Studio's compositor script) is on top, and
+// the stream's picture must show it over the scene.
 // Exit code 0 is a pass. Never points at a real relay or platform.
 import { app, BrowserWindow } from "electron";
 import { execFileSync } from "node:child_process";
 import { writeFileSync } from "node:fs";
+import http from "node:http";
 import path from "node:path";
 import { WebSocketServer } from "ws";
 import { EngineClient, engineAvailable, engineDir } from "../src/engine/client.js";
+import { OverlayFeed } from "../src/engine/overlayFeed.js";
+
+/** A stand-in for Studio's compositor script: once Studio's scene arrives, magenta over the top-left quarter. */
+const FAKE_COMPOSITOR = `let c = null;
+self.onmessage = (e) => {
+  const m = e.data;
+  if (m.type === "initCanvas") c = m.canvas.getContext("2d");
+  else if (m.type === "scene" && c) setInterval(() => {
+    c.clearRect(0, 0, c.canvas.width, c.canvas.height);
+    c.fillStyle = "#ff00ff";
+    c.fillRect(0, 0, c.canvas.width / 2, c.canvas.height / 2);
+  }, 100);
+};`;
 
 const fail = (msg) => {
   console.error(`SMOKE FAIL: ${msg}`);
@@ -39,9 +55,28 @@ app.whenReady().then(async () => {
       layers.push({ id: "L-screen", source: "screen", x: 960, y: 540, w: 960, h: 540, flipX: true });
     }
     sources.push({ id: "speakers", kind: "speakers" });
+    // Studio's overlays: the app's overlay page, its compositor script from "Studio's site" (here, on this PC).
+    const site = http.createServer((req, res) => {
+      if (req.url === "/assets/compositor.worker-smoke.js") {
+        res.writeHead(200, { "Content-Type": "text/javascript" });
+        res.end(FAKE_COMPOSITOR);
+      } else {
+        res.writeHead(404);
+        res.end();
+      }
+    });
+    await new Promise((r) => site.listen(0, "127.0.0.1", r));
+    const feed = new OverlayFeed({ log: (s, l, m) => console.log(`overlay ${l} ${s}: ${m}`) });
+    const ov = await feed.start(`http://127.0.0.1:${site.address().port}`);
+    feed.post({ type: "scene", scene: { id: "smoke", name: "Smoke", layers: [] }, fade: false });
+    const ovUrl = `http://127.0.0.1:${ov.port}/overlay.html?worker=/assets/compositor.worker-smoke.js&key=${ov.key}&w=1920&h=1080&fps=30&plane=0`;
+    sources.push({ id: "ov", kind: "overlay", url: ovUrl, fps: 30 });
+    layers.push({ id: "L-ov", source: "ov", x: 0, y: 0, w: 1920, h: 1080, fit: "fill" });
     await client.call("setScene", { canvas: { width: 1920, height: 1080, fps: 30 }, sources, layers });
     await client.call("preview", client.previewArgs(win.webContents, { rect: { x: 0, y: 0, width: 960, height: 540 }, show: true }));
     step("scene and preview up");
+    // The overlay page's browser starts with the scene; give it a moment before the stream starts.
+    await new Promise((r) => setTimeout(r, 3000));
 
     const got = { bytes: 0, chunks: [], ended: false, url: "" };
     const wss = new WebSocketServer({ host: "127.0.0.1", port: 0 });
@@ -77,6 +112,15 @@ app.whenReady().then(async () => {
     step(`probe: video ${v?.codec_name} ${v?.width}x${v?.height}, audio ${a?.codec_name} ${a?.sample_rate} Hz`);
     if (v?.codec_name !== "h264" || v.width !== 1920 || v.height !== 1080) return fail("video isn't 1080p H.264");
     if (a?.codec_name !== "aac") return fail("audio isn't AAC");
+    // The overlay page is in the picture: magenta top-left (Studio's overlay), the scene's teal top-right through it.
+    const px = execFileSync(path.join(engineDir(), "ffmpeg.exe"), ["-v", "error", "-sseof", "-1.5", "-i", file, "-frames:v", "1", "-vf", "scale=192:108", "-f", "rawvideo", "-pix_fmt", "rgb24", "-"]);
+    const at = (x, y) => [...px.subarray((y * 192 + x) * 3, (y * 192 + x) * 3 + 3)];
+    const near = (p, q) => p.every((v, i) => Math.abs(v - q[i]) < 48);
+    step(`overlay pixels: top-left ${at(48, 27)}, top-right ${at(144, 27)}`);
+    if (!near(at(48, 27), [255, 0, 255])) return fail("the overlay page isn't in the picture");
+    if (!near(at(144, 27), [0x18, 0xc2, 0xb4])) return fail("the overlay page isn't see-through");
+    feed.stop();
+    site.close();
     client.stop();
     wss.close();
     step("PASS");
