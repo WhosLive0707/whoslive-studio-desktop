@@ -6,6 +6,7 @@ app.whenReady().then(() => {
   const p = utilityProcess.fork(path.join(__dirname, "osn-experiment-child.cjs"), [], { stdio: "pipe", serviceName: "wl-exp" });
   p.stdout?.on("data", (d) => process.stdout.write(d));
   p.stderr?.on("data", (d) => process.stderr.write(d));
+  p.on("message", (m) => console.log(String(m)));
   p.on("exit", (code) => {
     console.log(`exp: child exited ${code}`);
     app.exit(0);
