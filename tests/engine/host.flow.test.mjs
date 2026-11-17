@@ -217,13 +217,18 @@ test("the vertical picture: its own canvas and layers, the main picture's copies
   assert.deepEqual(copied, ["wl-game", "wl-cam", "wl-cam"]);
   const camInCopy = log.filter((e) => e[0] === "transform" && e[1] === "wl-cam" && Math.abs(e[2].bounds.x - 400 * 0.5625) < 0.01);
   assert.ok(camInCopy.length >= 1);
-  // The program items sit at their boxes, clipped to them by a crop filter (not the item's crop); the backdrop is
-  // scaled back up.
+  // The program items sit at their boxes, uncropped (the copy's layers are clipped to the box instead); the backdrop
+  // is scaled back up.
   const prog = log.filter((e) => e[0] === "transform" && e[1] === "wl-wl-program").at(-1)[2];
   assert.deepEqual(prog.position, { x: 0, y: 656 });
-  assert.equal(prog.crop.bottom, 0);
-  const clip = log.filter((e) => e[0] === "filter" && e[1] === "wl-wl-program-clip").at(-1)[2];
-  assert.deepEqual([clip.relative, clip.cx, clip.cy], [false, 1080, 608]);
+  assert.deepEqual(prog.crop, { left: 0, top: 0, right: 0, bottom: 0 });
+  // Copied layers are stretched into the part of them that shows inside the box.
+  const copiedGame = log.filter((e) => e[0] === "transform" && e[1] === "wl-game" && e[2].bounds.x > 500 && e[2].bounds.x < 1500).map((e) => e[2]);
+  assert.ok(copiedGame.length >= 1);
+  for (const t of copiedGame) {
+    assert.ok(t.position.x >= 0 && t.position.x + t.bounds.x <= 1080.5);
+    assert.ok(t.position.y >= 0 && t.position.y + t.bounds.y <= 608.5);
+  }
   const blur = log.filter((e) => e[0] === "transform" && e[1] === "wl-wl-program-blur").at(-1)[2];
   assert.equal(blur.scale.x, 16);
 
