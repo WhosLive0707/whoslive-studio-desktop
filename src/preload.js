@@ -56,7 +56,7 @@ if (hello?.trusted) {
      *  null when this install doesn't have it; Studio then keeps its browser capture and encoder. */
     engine: hello.engine
       ? {
-          version: 1,
+          version: 2,
           start: () => engineCall("init"),
           devices: () => engineCall("devices"),
           setScene: (scene) => engineCall("setScene", scene),
@@ -67,6 +67,12 @@ if (hello?.trusted) {
             start: (cfg) => engineCall("startStream", cfg),
             reconnect: (url) => engineCall("reconnectStream", { url }),
             stop: () => engineCall("stopStream")
+          },
+          /** Studio's overlays on the engine's stream (src/engine/overlayFeed.js): where the overlay page connects
+           *  ({ port, key }), and the compositor's messages for it (pictures as ArrayBuffers). */
+          overlay: {
+            endpoint: () => ipcRenderer.invoke("engine:overlayEndpoint"),
+            post: (msg) => ipcRenderer.send("engine:overlay", msg)
           },
           /** Events: open, relay, closed, format, output, stats, levels, encoder-failed, source-error, crashed. */
           onEvent: (fn) => {
