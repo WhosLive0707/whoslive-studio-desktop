@@ -172,6 +172,43 @@ app.whenReady().then(async () => {
     if (!near(vat(90, 70), [0x18, 0xc2, 0xb4])) return fail("the vertical picture doesn't show the main picture");
     const bg = vat(54, 20);
     if (bg[0] + bg[1] + bg[2] < 60) return fail("the vertical picture's backdrop is empty");
+    // Another picture of the main scene at its own frame rate (LinkedIn's 30 next to 60; here 15 next to the main 30):
+    // its own canvas with the main layers copied, encoded and streamed on its own link.
+    const xgot = { bytes: 0, chunks: [], ended: false };
+    const xss = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+    await new Promise((r) => xss.on("listening", r));
+    xss.on("connection", (ws) => {
+      ws.send(JSON.stringify({ type: "ready", sid: "smoke-x", dests: ["Local"], dry: false }));
+      ws.on("message", (d, bin) => {
+        if (!bin) {
+          if (JSON.parse(String(d)).type === "end") xgot.ended = true;
+          return;
+        }
+        xgot.bytes += d.length;
+        xgot.chunks.push(Buffer.from(d));
+      });
+    });
+    await client.call("startStream", { url: `ws://127.0.0.1:${xss.address().port}/ingest?t=smoke-x`, kbps: 3000, fps: 15, prefer: "obs_x264", canvas: "r1" });
+    await new Promise((r) => setTimeout(r, 6000));
+    const xbuilt = await client.post("describe", {});
+    step(`extra picture: ${JSON.stringify(Object.fromEntries(Object.entries(xbuilt.extras ?? {}).map(([k, x]) => [k, { fps: x.fps, items: x.items.length }])))}`);
+    await client.call("stopStream", { canvas: "r1" });
+    for (let i = 0; i < 50 && !events.some((e) => e.event === "closed" && e.data?.canvas === "r1"); i++) await new Promise((r) => setTimeout(r, 100));
+    if (!xgot.ended || xgot.bytes < 200_000) return fail(`extra picture: relay got ${xgot.bytes} bytes, ended ${xgot.ended}`);
+    const xfile = path.join(app.getPath("temp"), "whoslive-smoke-extra.mkv");
+    writeFileSync(xfile, Buffer.concat(xgot.chunks));
+    const xprobe = JSON.parse(execFileSync(path.join(engineDir(), "ffprobe.exe"), ["-v", "error", "-show_streams", "-of", "json", xfile]).toString());
+    const xv = xprobe.streams.find((s) => s.codec_type === "video");
+    step(`extra probe: video ${xv?.codec_name} ${xv?.width}x${xv?.height} ${xv?.avg_frame_rate}`);
+    if (xv?.codec_name !== "h264" || xv.width !== 1920 || xv.height !== 1080) return fail("the extra picture isn't 1080p H.264");
+    const [fn, fd] = String(xv.avg_frame_rate ?? "0/1").split("/").map(Number);
+    if (!(fd > 0) || Math.abs(fn / fd - 15) > 2) return fail(`the extra picture runs at ${xv.avg_frame_rate}, not 15 fps`);
+    const xpx = execFileSync(path.join(engineDir(), "ffmpeg.exe"), ["-v", "error", "-sseof", "-1.5", "-i", xfile, "-frames:v", "1", "-vf", "scale=192:108", "-f", "rawvideo", "-pix_fmt", "rgb24", "-"]);
+    const xat = (x, y) => [...xpx.subarray((y * 192 + x) * 3, (y * 192 + x) * 3 + 3)];
+    step(`extra pixels: top-left ${xat(48, 27)}, top-right ${xat(144, 27)}`);
+    if (!near(xat(48, 27), [255, 0, 255])) return fail("the extra picture doesn't show the overlay");
+    if (!near(xat(144, 27), [0x18, 0xc2, 0xb4])) return fail("the extra picture doesn't show the scene");
+    xss.close();
     await client.call("setVerticalScene", { off: true });
     vss.close();
     feed.stop();
