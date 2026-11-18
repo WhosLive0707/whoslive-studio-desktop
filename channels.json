@@ -4,13 +4,13 @@
     "name": "@studio/desktop",
     "productName": "WhosLive Studio",
     "artifact": "WhosLive-Studio-Setup.exe",
-    "studioUrl": "https://beta.whoslive.io/studio"
+    "studioUrl": "https://whoslive.io/studio"
   },
   "dev": {
     "appId": "io.whoslive.studio.dev",
     "name": "@studio/desktop-dev",
-    "productName": "WhosLive Studio Dev",
-    "artifact": "WhosLive-Studio-Dev-Setup.exe",
+    "productName": "WhosLive Studio Beta",
+    "artifact": "WhosLive-Studio-Beta-Setup.exe",
     "studioUrl": "https://beta.whoslive.io/studio"
   }
 }

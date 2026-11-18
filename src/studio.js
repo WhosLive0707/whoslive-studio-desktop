@@ -3,29 +3,30 @@ import { CHANNEL } from "./channel.js";
 export const DEFAULT_STUDIO_URL = CHANNEL.studioUrl;
 export const MENU_ACTIONS = { "obs-import": "Import scenes from OBS…" };
 
-// The WhosLive Lovable project's published Studio (its custom domain): every Publish there reaches the app with no
-// reinstall.
-const PROD_URL = "https://beta.whoslive.io/studio";
-const DEV_URL = "https://dev-studio.whoslive.io/studio";
+// WhosLive's production Studio: every web release reaches the app with no reinstall.
+const PROD_URL = "https://whoslive.io/studio";
+const BETA_URL = "https://beta.whoslive.io/studio";
 
 export const STUDIO_CHOICES = [
   { id: "prod", label: "WhosLive Studio", url: PROD_URL },
-  { id: "dev", label: "Dev (dev-studio.whoslive.io)", url: DEV_URL },
+  { id: "beta", label: "Beta (beta.whoslive.io)", url: BETA_URL },
 ];
 
 /**
- * Addresses older versions saved that no longer point at a real Studio: 0.1.1 opened Lovable's copy by default, and
- * its menu opened the sites' landing pages. A saved one moves to its Studio.
+ * Addresses older versions saved that no longer point at a real Studio: 0.1.1 opened Lovable's copy by default, its
+ * menu opened the sites' landing pages, and up to 0.1.11 the app opened beta. A saved one moves to its Studio.
  */
 const MOVED = {
+  "https://beta.whoslive.io/studio": DEFAULT_STUDIO_URL,
+  "https://beta.whoslive.io/": DEFAULT_STUDIO_URL,
+  "https://www.whoslive.io/studio": DEFAULT_STUDIO_URL,
   "https://whoslive-studio.lovable.app/studio": DEFAULT_STUDIO_URL,
   "https://whoslivebeta.lovable.app/studio": DEFAULT_STUDIO_URL,
   "https://studio.whoslive.io/studio": DEFAULT_STUDIO_URL,
   "https://studio.whoslive.io/": DEFAULT_STUDIO_URL,
-  "https://dev-studio.whoslive.io/": DEV_URL,
-  // The test app (dev channel) always opens the real Studio: the old dev Studio address an earlier dev install saved
-  // doesn't win.
-  ...CHANNEL.appId.endsWith(".dev") ? { [DEV_URL]: DEFAULT_STUDIO_URL, "https://dev-studio.whoslive.io/": DEFAULT_STUDIO_URL } : {},
+  // The old dev Studio (frozen): each app opens its own Studio instead (the Beta app: beta).
+  "https://dev-studio.whoslive.io/studio": DEFAULT_STUDIO_URL,
+  "https://dev-studio.whoslive.io/": DEFAULT_STUDIO_URL,
 };
 
 /** WhosLive's own addresses, trusted wherever Studio moves between them (whoslive.io takes over after the merge). */
