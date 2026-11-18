@@ -134,7 +134,18 @@ module.exports = {
     OBS_content_resizeDisplay: (n, w, h) => log.push(["resize", n, w, h]),
     OBS_content_destroyDisplay() {},
   },
-  VideoFactory: { create: () => ({ video: null, skippedFrames: 0, encodedFrames: 0, destroy() { log.push(["video-destroy"]); } }) },
+  VideoFactory: {
+    create: () => {
+      let v = null;
+      return {
+        get video() { return v; },
+        set video(x) { v = x; log.push(["video-set", x?.baseWidth, x?.baseHeight, x?.fpsNum]); },
+        skippedFrames: 0,
+        encodedFrames: 0,
+        destroy() { log.push(["video-destroy"]); },
+      };
+    },
+  },
   SceneFactory: { create: (n) => new Scene(n), createPrivate: (n) => new Scene(n, true) },
   TransitionFactory: { create: () => ({ set() {}, release() {} }) },
   Global: { setOutputSource() {}, cpuPercentage: 3.2, currentFrameRate: 60, averageFrameRenderTime: 1.1, laggedFrames: 0 },
