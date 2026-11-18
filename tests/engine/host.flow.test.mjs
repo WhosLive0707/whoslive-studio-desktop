@@ -260,3 +260,44 @@ test("the vertical picture: its own canvas and layers, the main picture's copies
   assert.ok(log.some((e) => e[0] === "video-destroy"));
   assert.ok(!log.some((e) => e[0] === "release" && e[1] === "wl-cam"));
 });
+
+test("more pictures of the main scene: LinkedIn's 30 fps on its own canvas, a same-rate one on the main canvas", { skip }, async (t) => {
+  const h = startHost();
+  t.after(() => h.child.kill());
+  await h.until(() => h.events.find((e) => e.event === "hello"));
+  await h.call("init", { dir: mock, appData: tmpdir(), version: "test" });
+  await h.call("setScene", scene());
+  const relay = await startRelay();
+  t.after(() => relay.wss.close());
+  await h.call("startStream", { url: `ws://127.0.0.1:${relay.port}/ingest?t=main`, kbps: 9000 });
+  const before = h.osnLog().filter((e) => e[0] === "video-set").length;
+  // LinkedIn at 30: a canvas of the main size at 30 fps, its own private scene nested on it, the main layers copied.
+  await h.call("startStream", { url: `ws://127.0.0.1:${relay.port}/ingest?t=linkedin`, kbps: 6000, fps: 30, canvas: "r1" });
+  let log = h.osnLog();
+  assert.ok(log.slice().reverse().find((e) => e[0] === "video-set" && e[1] === 1920 && e[2] === 1080 && e[3] === 30));
+  assert.ok(log.some((e) => e[0] === "scene" && e[1] === "wl-r1" && e[2] === true));
+  assert.ok(log.some((e) => e[0] === "add-item" && e[1] === "wl-r1"));
+  const copied = log.filter((e) => e[0] === "add-item" && e[2] === "wl-r1").map((e) => e[1]);
+  assert.deepEqual(copied, ["wl-game", "wl-cam", "wl-cam"]);
+  // A same-rate picture at its own bitrate: the main canvas encoded again, no new canvas.
+  const sets = h.osnLog().filter((e) => e[0] === "video-set").length;
+  await h.call("startStream", { url: `ws://127.0.0.1:${relay.port}/ingest?t=twitch`, kbps: 6000, fps: 60, canvas: "r2" });
+  assert.equal(h.osnLog().filter((e) => e[0] === "video-set").length, sets);
+  assert.ok(sets > before);
+  await h.until(() => relay.got.urls.length === 3);
+  const starts = h.osnLog().filter((e) => e[0] === "stream-start");
+  assert.equal(starts.length >= 3, true);
+  await h.until(() => h.events.find((e) => e.event === "stats" && e.data.canvas === "r1" && e.data.live));
+  // Moving the camera moves its copy on the 30 fps picture too.
+  await h.call("setScene", scene(1000));
+  assert.ok(h.osnLog().some((e) => e[0] === "transform" && e[1] === "wl-cam" && Math.abs(e[2].position.x - 1000) < 0.01));
+  // LinkedIn ends: its canvas goes; the others keep streaming.
+  await h.call("stopStream", { canvas: "r1" });
+  await h.until(() => h.events.find((e) => e.event === "closed" && e.data.canvas === "r1"), 6000);
+  log = h.osnLog();
+  assert.ok(log.some((e) => e[0] === "video-destroy"));
+  assert.ok(!h.events.some((e) => e.event === "closed" && (e.data.canvas === "main" || e.data.canvas === "r2")));
+  await h.call("stopStream", { canvas: "r2" });
+  await h.call("stopStream", {});
+  await h.until(() => h.events.find((e) => e.event === "closed" && e.data.canvas === "main"), 6000);
+});
