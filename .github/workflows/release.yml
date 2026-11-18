@@ -1,6 +1,6 @@
 name: release
 
-# main builds WhosLive Studio (opens studio.whoslive.io) and publishes every build as a new release v<version>, which
+# main builds WhosLive Studio (opens whoslive.io/studio) and publishes every build as a new release v<version>, which
 # becomes GitHub's "latest": the download link and the update feed every installed copy checks. The version is
 # package.json's, or one patch past the newest release when that one is taken (next-version.mjs).
 # develop builds WhosLive Studio Dev (opens dev-studio.whoslive.io) as <version>-dev.<run> and replaces the assets on

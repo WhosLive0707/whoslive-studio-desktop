@@ -10,7 +10,7 @@ Until the app is code-signed, Windows may show "Windows protected your PC". Clic
 
 | Branch | App | Opens | Download |
 |---|---|---|---|
-| `main` | WhosLive Studio | studio.whoslive.io | [WhosLive-Studio-Setup.exe](https://github.com/WhosLive0707/whoslive-studio-desktop/releases/latest/download/WhosLive-Studio-Setup.exe) |
+| `main` | WhosLive Studio | whoslive.io/studio | [WhosLive-Studio-Setup.exe](https://github.com/WhosLive0707/whoslive-studio-desktop/releases/latest/download/WhosLive-Studio-Setup.exe) |
 | `develop` | WhosLive Studio Dev | dev-studio.whoslive.io | [WhosLive-Studio-Dev-Setup.exe](https://github.com/WhosLive0707/whoslive-studio-desktop/releases/download/dev/WhosLive-Studio-Dev-Setup.exe) |
 
 The two install side by side. The app is a shell around the web Studio, so a Studio deploy reaches it without a new installer; only changes under `src/` need one.
