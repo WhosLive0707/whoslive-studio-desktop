@@ -5,11 +5,11 @@ export const MENU_ACTIONS = { "obs-import": "Import scenes from OBS…" };
 
 // WhosLive's production Studio: every web release reaches the app with no reinstall.
 const PROD_URL = "https://whoslive.io/studio";
-const DEV_URL = "https://dev-studio.whoslive.io/studio";
+const BETA_URL = "https://beta.whoslive.io/studio";
 
 export const STUDIO_CHOICES = [
   { id: "prod", label: "WhosLive Studio", url: PROD_URL },
-  { id: "dev", label: "Dev (dev-studio.whoslive.io)", url: DEV_URL },
+  { id: "beta", label: "Beta (beta.whoslive.io)", url: BETA_URL },
 ];
 
 /**
@@ -24,7 +24,9 @@ const MOVED = {
   "https://whoslivebeta.lovable.app/studio": DEFAULT_STUDIO_URL,
   "https://studio.whoslive.io/studio": DEFAULT_STUDIO_URL,
   "https://studio.whoslive.io/": DEFAULT_STUDIO_URL,
-  "https://dev-studio.whoslive.io/": DEV_URL,
+  // The old dev Studio (frozen): each app opens its own Studio instead (the Beta app: beta).
+  "https://dev-studio.whoslive.io/studio": DEFAULT_STUDIO_URL,
+  "https://dev-studio.whoslive.io/": DEFAULT_STUDIO_URL,
 };
 
 /** WhosLive's own addresses, trusted wherever Studio moves between them (whoslive.io takes over after the merge). */
