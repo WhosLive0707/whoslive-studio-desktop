@@ -1,0 +1,56 @@
+name: native-engine
+
+# The native engine (OBS's libobs via obs-studio-node) on feature branches only: unit and flow tests, a smoke test of
+# the real engine on Windows (x264, local stand-in relay), and a test installer as a build artifact. Never publishes a
+# release: main and develop keep release.yml, which doesn't package the engine.
+on:
+  push:
+    branches: ["feature/native-engine", "feature/native-engine-*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  engine:
+    runs-on: windows-2022
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Fetch OBS's engine (pinned, checksum checked)
+        run: node scripts/fetch-osn.mjs
+      - name: Build (with the smoke test)
+        run: WL_SMOKE=1 node build.mjs
+      - name: Unit tests
+        run: npm test
+      - name: Experiment (vertical canvas, not a test)
+        continue-on-error: true
+        # The first Electron run downloads Electron.
+        timeout-minutes: 10
+        env:
+          WL_ENGINE_DIR: vendor/obs-studio-node
+        run: npx electron dist/osn-experiment.cjs
+      - name: Smoke test the real engine
+        env:
+          WL_ENGINE_DIR: vendor/obs-studio-node
+        run: npx electron dist/engine-smoke.cjs
+      - name: Test installer (dev app, installs next to WhosLive Studio; not published)
+        run: npm run dist
+        # Signed like release.yml (Azure Artifact Signing): without the credentials the signer waits forever.
+        env:
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: WhosLive-Studio-Dev-Setup-native-engine
+          path: release/WhosLive-Studio-Dev-Setup.exe
+          retention-days: 14

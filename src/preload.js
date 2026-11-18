@@ -9,6 +9,11 @@ if (hello?.trusted) {
   const shortcutFns = new Map();
   ipcRenderer.on("shortcut:press", (_e, accel) => shortcutFns.get(accel)?.());
   let menuFn = null;
+  const engineFns = new Set();
+  ipcRenderer.on("engine:event", (_e, name, data) => {
+    for (const f of engineFns) f(name, data);
+  });
+  const engineCall = (type, args) => ipcRenderer.invoke("engine:call", type, args);
   ipcRenderer.on("desktop:menu", (_e, action) => menuFn?.(action));
   contextBridge.exposeInMainWorld("whosliveDesktop", {
     version: hello.version,
@@ -47,6 +52,39 @@ if (hello?.trusted) {
       next: (key) => ipcRenderer.invoke("capture:next", key),
       restore: (key) => ipcRenderer.invoke("capture:restore", key)
     },
+    /** OBS's engine (docs/native-engine.md): capture, mixing, encoding and the stream to the relay, natively.
+     *  null when this install doesn't have it; Studio then keeps its browser capture and encoder. */
+    engine: hello.engine
+      ? {
+          version: 3,
+          start: () => engineCall("init"),
+          devices: () => engineCall("devices"),
+          setScene: (scene) => engineCall("setScene", scene),
+          /** The vertical picture's scene on the engine's second canvas (null takes it away). */
+          setVerticalScene: (scene) => engineCall("setVerticalScene", scene ?? { off: true }),
+          setAudio: (map) => engineCall("setAudio", map),
+          /** rect: the preview tile in CSS pixels of this page; show false hides the native preview. */
+          preview: (rect, show = true) => engineCall("preview", { rect, show }),
+          stream: {
+            /** cfg.canvas: "vertical" streams the vertical picture (its own output); the main one otherwise. */
+            start: (cfg) => engineCall("startStream", cfg),
+            reconnect: (url, canvas) => engineCall("reconnectStream", { url, canvas }),
+            stop: (canvas) => engineCall("stopStream", { canvas })
+          },
+          /** Studio's overlays on the engine's stream (src/engine/overlayFeed.js): where the overlay page connects
+           *  ({ port, key }), and the compositor's messages for it (pictures as ArrayBuffers). */
+          overlay: {
+            endpoint: () => ipcRenderer.invoke("engine:overlayEndpoint"),
+            post: (msg) => ipcRenderer.send("engine:overlay", msg)
+          },
+          /** Events: open, relay, closed, format, output, stats, levels, encoder-failed, source-error, crashed. */
+          onEvent: (fn) => {
+            if (typeof fn !== "function") return () => void 0;
+            engineFns.add(fn);
+            return () => void engineFns.delete(fn);
+          }
+        }
+      : null,
     /** Global shortcuts (the agent's talk key while a game has focus). register resolves false when the key is
      *  taken by another app or isn't one Electron knows. */
     shortcuts: {
