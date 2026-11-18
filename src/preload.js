@@ -56,7 +56,10 @@ if (hello?.trusted) {
      *  null when this install doesn't have it; Studio then keeps its browser capture and encoder. */
     engine: hello.engine
       ? {
-          version: 3,
+          version: 4,
+          /** More pictures of the main scene (stream.start with canvas "r1".."r9" and its own fps/kbps), each
+           *  encoded on the graphics card, like OBS with several outputs. */
+          pictures: true,
           start: () => engineCall("init"),
           devices: () => engineCall("devices"),
           setScene: (scene) => engineCall("setScene", scene),
@@ -66,7 +69,8 @@ if (hello?.trusted) {
           /** rect: the preview tile in CSS pixels of this page; show false hides the native preview. */
           preview: (rect, show = true) => engineCall("preview", { rect, show }),
           stream: {
-            /** cfg.canvas: "vertical" streams the vertical picture (its own output); the main one otherwise. */
+            /** cfg.canvas: "vertical" streams the vertical picture (its own output); "r1".."r9" another picture of the
+             *  main scene (cfg.fps: its frame rate when it differs, cfg.kbps: its bitrate); the main one otherwise. */
             start: (cfg) => engineCall("startStream", cfg),
             reconnect: (url, canvas) => engineCall("reconnectStream", { url, canvas }),
             stop: (canvas) => engineCall("stopStream", { canvas })
