@@ -51,7 +51,11 @@ const st = {
   vnest: null,
   vitems: new Map(),
   progs: new Map(), // program source id -> { scene, blur, items }
-  outs: new Map(), // "main" | "vertical" -> { streaming, encoder, service, link, info, kbps, url, stopping }
+  outs: new Map(), // "main" | "vertical" | "r1".."r9" -> { streaming, encoder, service, link, info, kbps, url, stopping }
+  // More pictures of the main scene, like OBS with several outputs: a platform group at another frame rate (LinkedIn's
+  // 30 while the rest get 60) gets its own canvas with copies of the main layers; one at the same frame rate encodes
+  // the main canvas again at its own bitrate. Every picture is drawn and encoded on the graphics card.
+  extras: new Map(), // "r1".."r9" -> { ctx, scene, nest, items, fps }
   audioTrack: null,
   filters: new Map(), // layer id -> opacity filter
   volmeters: new Map(), // studio id -> IVolmeter
@@ -118,6 +122,7 @@ function shutdown() {
     }
   }
   st.outs.clear();
+  for (const k of [...st.extras.keys()]) dropExtra(k);
   const osn = st.osn;
   if (!osn) return { ok: true };
   try {
@@ -211,7 +216,9 @@ const mainCol = () => ({ name: "main", scene: st.scene, video: st.ctx, items: st
 const vCol = () => ({ name: "vertical", scene: st.vscene, video: st.vctx, items: st.vitems });
 /** A program copy: its layers are clipped to `region`, the part of the copy that shows (vertical.js). */
 const progCol = (p, region) => ({ name: "program", scene: p.scene, video: st.vctx, items: p.items, region });
-const allItems = () => [st.items, st.vitems, ...[...st.progs.values()].map((p) => p.items)];
+/** Another picture of the main scene at its own frame rate: the main layers, copied onto its own canvas. */
+const extraCol = (x) => ({ name: "extra", scene: x.scene, video: x.ctx, items: x.items });
+const allItems = () => [st.items, st.vitems, ...[...st.progs.values()].map((p) => p.items), ...[...st.extras.values()].map((x) => x.items)];
 
 /** Every input the pictures need: the main scene's, then the vertical one's. */
 function wanted(main, vertical) {
@@ -300,6 +307,7 @@ function setScene(scene) {
   let changed = syncInputs(wanted(st.plan, st.vplan), wanted(next, st.vplan));
   st.plan = next;
   if (syncLayers(mainCol(), next.layers)) changed = true;
+  for (const x of st.extras.values()) if (syncLayers(extraCol(x), next.layers)) changed = true;
   if (st.vplan) {
     if (syncLayers(vCol(), st.vplan.layers)) changed = true;
     if (syncPrograms()) changed = true;
@@ -358,6 +366,50 @@ function dropVertical() {
     /* gone */
   }
   st.vnest = st.vscene = st.vctx = st.vplan = null;
+}
+
+/** The picture `key` at `fps`: its canvas (the main one's size), a private scene nested on it, the main layers copied. */
+function ensureExtra(key, fps) {
+  const osn = st.osn;
+  const size = st.plan?.canvas ?? NO_CANVAS;
+  const have = st.extras.get(key);
+  if (have && have.fps === fps) return have;
+  if (have) dropExtra(key);
+  const ctx = osn.VideoFactory.create();
+  setCanvasOf(ctx, { width: size.width, height: size.height, fps });
+  const scene = osn.SceneFactory.createPrivate(`wl-${key}`);
+  const nest = st.scene.add(scene.source);
+  try {
+    nest.video = ctx;
+  } catch {
+    /* single-canvas builds: no extra pictures */
+  }
+  const x = { ctx, scene, nest, items: new Map(), fps };
+  st.extras.set(key, x);
+  syncLayers(extraCol(x), st.plan?.layers ?? []);
+  return x;
+}
+
+function dropExtra(key) {
+  const x = st.extras.get(key);
+  if (!x) return;
+  for (const [lid] of [...x.items]) removeItemFrom(x.items, lid, false);
+  try {
+    x.nest?.remove();
+  } catch {
+    /* gone */
+  }
+  try {
+    x.scene?.release();
+  } catch {
+    /* gone */
+  }
+  try {
+    x.ctx?.destroy();
+  } catch {
+    /* gone */
+  }
+  st.extras.delete(key);
 }
 
 function createInput(osn, input) {
@@ -632,25 +684,29 @@ function preview({ hwnd, rect, show }) {
 
 /* ---------------- streaming ---------------- */
 
-/** "main" (default) or "vertical": which picture a stream call is about. */
-const canvasOf = (c) => (c === "vertical" ? "vertical" : "main");
+/** "main" (default), "vertical", or another picture of the main scene ("r1".."r9"): which one a stream call is about. */
+const canvasOf = (c) => (c === "vertical" ? "vertical" : typeof c === "string" && /^r[1-9]$/.test(c) ? c : "main");
+const isExtra = (c) => c !== "main" && c !== "vertical";
 /** Events about a picture's stream say which (Studio's uploads listen for their own). */
 const emitFor = (canvas, event, data) => emit(event, { ...data, canvas });
 
-async function startStream({ url, kbps, audioKbps = 160, prefer, width, height, reconnect = false, canvas: which }) {
+async function startStream({ url, kbps, audioKbps = 160, prefer, width, height, fps, reconnect = false, canvas: which }) {
   const canvas = canvasOf(which);
   if (st.outs.has(canvas) && !reconnect) throw new Error("Already live");
   if (canvas === "vertical" && !st.vctx) throw new Error("The vertical picture isn't set up");
   const osn = st.osn;
   const enc = pickEncoder(osn.VideoEncoderFactory.types(), { prefer, failed: st.failedEncoders });
   if (!enc) throw new Error("No video encoder is available on this PC.");
+  const mainFps = st.plan?.canvas.fps ?? NO_CANVAS.fps;
+  // Another picture of the main scene: the main canvas again (same frame rate), or its own canvas at `fps`.
+  const own = isExtra(canvas) && Number.isFinite(fps) && fps > 0 && fps !== mainFps ? ensureExtra(canvas, Math.round(fps)) : null;
   const plan = canvas === "vertical" ? st.vplan : st.plan;
-  const ctx = canvas === "vertical" ? st.vctx : st.ctx;
-  const cv = plan?.canvas ?? (canvas === "vertical" ? { width: 1080, height: 1920, fps: 30 } : NO_CANVAS);
+  const ctx = canvas === "vertical" ? st.vctx : own ? own.ctx : st.ctx;
+  const cv = own ? { ...(plan?.canvas ?? NO_CANVAS), fps: own.fps } : plan?.canvas ?? (canvas === "vertical" ? { width: 1080, height: 1920, fps: 30 } : NO_CANVAS);
   // The stream's own size (a 1440p canvas can stream 1080p); OBS scales it on the GPU.
-  if (width && height && (width !== cv.width || height !== cv.height)) setCanvasOf(ctx, cv, { width, height });
+  if (width && height && (width !== cv.width || height !== cv.height) && (!isExtra(canvas) || own)) setCanvasOf(ctx, cv, { width, height });
   const link = new RelayLink({ ffmpeg: path.join(st.dir, "ffmpeg.exe"), url, kbps, log });
-  const out = { canvas, link, info: encoderInfo(enc.id), kbps, url, stopping: false, streaming: null, encoder: null, service: null, startedAt: Date.now() };
+  const out = { canvas, link, info: encoderInfo(enc.id), kbps, fps: cv.fps, url, stopping: false, streaming: null, encoder: null, service: null, startedAt: Date.now() };
   st.outs.set(canvas, out);
   link.on("relay", (msg) => emitFor(canvas, "relay", msg));
   link.on("stats", (s) => (out.linkStats = s));
@@ -658,8 +714,9 @@ async function startStream({ url, kbps, audioKbps = 160, prefer, width, height, 
     stopOutput(false, out);
     if (st.outs.get(canvas) === out) {
       st.outs.delete(canvas);
-      // Back to the canvas's own size (a stream may have been scaled down).
-      if (plan) setCanvasOf(ctx, plan.canvas);
+      // Back to the canvas's own size (a stream may have been scaled down); another picture's own canvas goes.
+      if (own) dropExtra(canvas);
+      else if (plan && !isExtra(canvas)) setCanvasOf(ctx, plan.canvas);
     }
     emitFor(canvas, "closed", info);
   });
@@ -673,7 +730,7 @@ async function startStream({ url, kbps, audioKbps = 160, prefer, width, height, 
     }
   });
   try {
-    out.encoder = osn.VideoEncoderFactory.create(enc.id, canvas === "vertical" ? "wl-video-vertical" : "wl-video", encoderSettings(enc.id, { kbps }));
+    out.encoder = osn.VideoEncoderFactory.create(enc.id, canvas === "main" ? "wl-video" : `wl-video-${canvas}`, encoderSettings(enc.id, { kbps }));
     if (out.encoder.lastError) throw new Error(out.encoder.lastError);
     // One sound for both pictures: the engine mixes once.
     if (!st.audioTrack) {
@@ -686,7 +743,7 @@ async function startStream({ url, kbps, audioKbps = 160, prefer, width, height, 
     s.audioTrack = 1;
     s.enforceServiceBitrate = false;
     s.enableTwitchVOD = false;
-    out.service = osn.ServiceFactory.create("rtmp_custom", canvas === "vertical" ? "wl-local-vertical" : "wl-local", { server: "rtmp://127.0.0.1:1/live", key: "x", use_auth: false, bwtest: false });
+    out.service = osn.ServiceFactory.create("rtmp_custom", canvas === "main" ? "wl-local" : `wl-local-${canvas}`, { server: "rtmp://127.0.0.1:1/live", key: "x", use_auth: false, bwtest: false });
     s.service = out.service;
     const delay = osn.DelayFactory.create();
     delay.enabled = false;
@@ -716,6 +773,7 @@ async function startStream({ url, kbps, audioKbps = 160, prefer, width, height, 
     link.shut(4500, "The engine couldn't start the stream");
     stopOutput(true, out);
     if (st.outs.get(canvas) === out) st.outs.delete(canvas);
+    if (own && !st.outs.has(canvas)) dropExtra(canvas);
     throw e;
   }
 }
@@ -772,13 +830,14 @@ async function reconnectStream({ url, canvas: which }) {
   const canvas = canvasOf(which);
   const prev = st.outs.get(canvas);
   const kbps = prev ? prev.kbps : 6000;
+  const fps = prev?.fps;
   if (prev) {
     prev.link.removeAllListeners("closed");
     prev.link.shut(4000, "reconnecting");
     stopOutput(false, prev);
     st.outs.delete(canvas);
   }
-  return startStream({ url, kbps, reconnect: true, canvas });
+  return startStream({ url, kbps, fps, reconnect: true, canvas });
 }
 
 /* ---------------- stats ---------------- */
@@ -813,6 +872,7 @@ function statsTick() {
     emit("stats", { ...common, ...live(st.outs.get("main"), st.ctx) });
     const v = st.outs.get("vertical");
     if (v) emitFor("vertical", "stats", { ...common, ...live(v, st.vctx) });
+    for (const [k, o] of st.outs) if (isExtra(k)) emitFor(k, "stats", { ...common, ...live(o, st.extras.get(k)?.ctx ?? st.ctx) });
   } catch {
     /* engine going down */
   }
@@ -847,6 +907,7 @@ async function describe({ shots = false } = {}) {
     programs: [...st.progs].map(([id, p]) => ({ id, size: [p.scene.source?.width, p.scene.source?.height], items: [...p.items.values()].map(one) })),
     nest: st.vnest ? one({ item: st.vnest, layer: { id: "vnest", source: "wl-vertical" }, input: st.vscene?.source }) : null,
     canvases: [st.ctx?.canvasId ?? null, st.vctx?.canvasId ?? null],
+    extras: Object.fromEntries([...st.extras].map(([k, x]) => [k, { fps: x.fps, items: [...x.items.values()].map(one) }])),
   };
   if (shots) {
     const dir = path.join(os.tmpdir(), "wl-describe");
