@@ -11,7 +11,7 @@ Until the app is code-signed, Windows may show "Windows protected your PC". Clic
 | Branch | App | Opens | Download |
 |---|---|---|---|
 | `main` | WhosLive Studio | whoslive.io/studio | [WhosLive-Studio-Setup.exe](https://github.com/WhosLive0707/whoslive-studio-desktop/releases/latest/download/WhosLive-Studio-Setup.exe) |
-| `develop` | WhosLive Studio Dev | dev-studio.whoslive.io | [WhosLive-Studio-Dev-Setup.exe](https://github.com/WhosLive0707/whoslive-studio-desktop/releases/download/dev/WhosLive-Studio-Dev-Setup.exe) |
+| `develop` | WhosLive Studio Beta (not the official app) | beta.whoslive.io/studio | [WhosLive-Studio-Beta-Setup.exe](https://github.com/WhosLive0707/whoslive-studio-desktop/releases/download/dev/WhosLive-Studio-Beta-Setup.exe) |
 
 The two install side by side. The app is a shell around the web Studio, so a Studio deploy reaches it without a new installer; only changes under `src/` need one.
 
@@ -32,7 +32,7 @@ has focus. A key another app already holds isn't taken from it, and a page's key
 
 ```
 npm ci
-npm start                          # dev app against dev-studio, on this computer
+npm start                          # dev app against beta, on this computer
 WL_CHANNEL=prod npm start          # prod app
 WL_CHANNEL=prod npm run dist       # Windows installer into release/
 ```

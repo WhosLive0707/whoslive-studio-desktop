@@ -10,12 +10,14 @@
   "scripts": {
     "build": "node build.mjs",
     "start": "node build.mjs && electron .",
-    "dist": "node build.mjs && electron-builder --config electron-builder.config.cjs --win --publish never"
+    "dist": "node build.mjs && electron-builder --config electron-builder.config.cjs --win --publish never",
+    "test": "node --test tests/engine/*.test.mjs"
   },
   "devDependencies": {
     "electron": "44.4.5",
     "electron-builder": "26.16.1",
     "electron-updater": "6.8.10",
-    "esbuild": "0.25.10"
+    "esbuild": "0.25.10",
+    "ws": "^8.18.3"
   }
 }
