@@ -52,5 +52,5 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: WhosLive-Studio-Dev-Setup-native-engine
-          path: release/WhosLive-Studio-Beta-Setup.exe
+          path: release/WhosLive-Studio-Dev-Setup.exe
           retention-days: 14
